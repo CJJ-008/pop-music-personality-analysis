@@ -133,6 +133,8 @@ Spotify 数据 ─► 去重/特征工程 ─► 流行度回归（线性回归 
 ├── README.md             # 本文件
 ├── app.py                # Streamlit 交互式仪表盘（带登录/注册）
 ├── auth.py               # 登录认证模块（凭据读取、注册用户持久化）
+├── launcher.py           # exe 启动器（起本地服务、自动开浏览器、端口探测）
+├── streamlit_app.spec    # PyInstaller 打包配置
 ├── requirements.txt      # 依赖清单（含锁定版本，部署云端必需）
 ├── .python-version       # 指定 Python 版本（3.12）
 ├── .streamlit/
@@ -228,6 +230,27 @@ streamlit run app.py              # 浏览器访问 http://localhost:8501
 5. Deploy，约 2~4 分钟后得到 `xxx.streamlit.app` 公开网址
 
 **在线演示：<!-- 部署完成后把网址填在这里，例如 https://pop-music-personality.streamlit.app -->**
+
+### 3. 打包成 exe（离线分发，可选）
+
+`streamlit_app.spec` + `launcher.py` 用 PyInstaller 把仪表盘打成单文件 exe
+（`发布包/性格歌手推荐器.exe`，约 276MB，**不入 git**——超过 GitHub 单文件 100MB 限制）。
+双击后自动启动本地服务并打开浏览器，登录后使用，全程离线。
+
+```bash
+pip install pyinstaller
+pyinstaller --clean -y streamlit_app.spec
+```
+
+- 发行包结构：exe + `.streamlit/secrets.toml`（密码存 bcrypt 哈希）+ `使用说明.txt`
+- 注册账号持久化在 exe 旁的 `data/users.json`（本地文件系统，比云部署可靠）
+- 已知限制：体积大；杀毒软件可能误报（PyInstaller 通病）；本质仍是
+  "本地服务 + 浏览器"形态，不是传统桌面窗口
+
+**打包踩坑记录**（详见 技术栈说明.md 第 35 条）：Streamlit 动态导入的
+`magic_funcs` 需声明 hiddenimports；`extra_streamlit_components` 与 `captcha`
+的数据文件需 collect_data_files；路径按 `sys.frozen` 分流（只读资源在
+`sys._MEIPASS`，可写文件在 exe 目录）。
 
 ## 九、如何运行（完整分析流程）
 

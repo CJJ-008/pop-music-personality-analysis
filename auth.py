@@ -17,13 +17,31 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 
 import streamlit as st
 import streamlit_authenticator as stauth
 
-ROOT = Path(__file__).resolve().parent
+
+def resolve_dirs() -> tuple[Path, Path]:
+    """返回 (只读资源目录, 可写基准目录)。
+
+    源码运行：两者都是项目根目录。
+    PyInstaller 打包运行：资源（app.py、结果表）在解包临时目录 _MEIPASS，
+    可写文件（.streamlit/secrets.toml、data/users.json）在 exe 所在目录——
+    这样用户把 exe 拷到哪里，注册账号就持久化到哪里（比云端的临时文件系统可靠）。
+    """
+    if getattr(sys, "frozen", False):
+        resource = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        base = Path(sys.executable).parent
+    else:
+        resource = base = Path(__file__).resolve().parent
+    return resource, base
+
+
+RESOURCE_DIR, ROOT = resolve_dirs()
 USERS_FILE = ROOT / "data" / "users.json"
 
 # 表单中文标签（库默认是英文，这里全部汉化）
@@ -134,40 +152,43 @@ def login_gate() -> tuple[stauth.Authenticate, str | None, str | None]:
         auto_hash=True,  # 明文自动哈希；已是 bcrypt 哈希的（注册用户）会原样保留
     )
 
-    st.title("🎧 性格 × 流行歌手推荐器")
-    st.caption("请登录后使用。首次使用请切换到「注册」标签创建账号。")
+    # 已认证（本会话登录过）则不再渲染登录界面，直接进入仪表盘；
+    # Cookie 免登录的首次访问仍会先显示一次登录壳，点任意交互后即消失
+    already = st.session_state.get("authentication_status") is True
 
-    tab_login, tab_register = st.tabs(["登录", "注册"])
+    if not already:
+        st.title("🎧 性格 × 流行歌手推荐器")
+        st.caption("请登录后使用。首次使用请切换到「注册」标签创建账号。")
 
-    with tab_login:
-        authenticator.login(location="main", fields=LOGIN_FIELDS, clear_on_submit=False)
+        tab_login, tab_register = st.tabs(["登录", "注册"])
 
-    with tab_register:
-        st.caption(PASSWORD_HINT_CN)
-        try:
-            result = authenticator.register_user(
-                location="main", captcha=True, fields=REGISTER_FIELDS
-            )
-            # register_user 成功时返回 (email, username, name)
-            if result and result[1]:
-                _persist_new_user(authenticator, result[1])
-                st.success(f"账号「{result[1]}」注册成功，请切换到「登录」标签登录。")
-                st.balloons()
-        except Exception as exc:  # noqa: BLE001 - 库会抛各类校验异常，原样提示给用户
-            st.error(str(exc))
+        with tab_login:
+            authenticator.login(location="main", fields=LOGIN_FIELDS, clear_on_submit=False)
 
-    status = st.session_state.get("authentication_status")
-    if status is False:
-        st.error("用户名或密码错误")
-    elif status is None:
-        st.info("请输入用户名和密码，或先注册一个账号")
+        with tab_register:
+            st.caption(PASSWORD_HINT_CN)
+            try:
+                result = authenticator.register_user(
+                    location="main", captcha=True, fields=REGISTER_FIELDS
+                )
+                # register_user 成功时返回 (email, username, name)
+                if result and result[1]:
+                    _persist_new_user(authenticator, result[1])
+                    st.success(f"账号「{result[1]}」注册成功，请切换到「登录」标签登录。")
+                    st.balloons()
+            except Exception as exc:  # noqa: BLE001 - 库会抛各类校验异常，原样提示给用户
+                st.error(str(exc))
 
-    if not status:
+        status = st.session_state.get("authentication_status")
+        if status is False:
+            st.error("用户名或密码错误")
+        elif status is None:
+            st.info("请输入用户名和密码，或先注册一个账号")
+
+    if not st.session_state.get("authentication_status"):
         st.stop()
 
-    name = st.session_state.get("name")
-    username = st.session_state.get("username")
-    return authenticator, name, username
+    return authenticator, st.session_state.get("name"), st.session_state.get("username")
 
 
 def _credentials_of(authenticator: stauth.Authenticate) -> dict:

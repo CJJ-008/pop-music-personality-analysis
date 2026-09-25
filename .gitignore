@@ -23,3 +23,9 @@ data/users.json
 
 # ---- 大型二进制输出 ----
 outputs/models/
+
+# ---- PyInstaller 打包产物 ----
+# exe 体积超过 GitHub 单文件 100MB 限制，且属可再生成物，不入库
+build/
+dist/
+发布包/

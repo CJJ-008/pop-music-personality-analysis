@@ -15,10 +15,11 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from auth import login_gate
+from auth import login_gate, resolve_dirs
 
-ROOT = Path(__file__).resolve().parent
-TAB = ROOT / "outputs" / "tables"
+# 结果表在打包后位于 _MEIPASS 只读资源目录，源码运行时就是项目根目录
+RESOURCE_DIR, ROOT = resolve_dirs()
+TAB = RESOURCE_DIR / "outputs" / "tables"
 
 st.set_page_config(page_title="性格 × 流行歌手推荐器", page_icon="🎧", layout="wide")
 
@@ -115,8 +116,7 @@ with col_read:
     for trait in cats:
         v = z_row[trait]
         if v >= 0:
-            st.markdown(f"- **{trait}**：高于平均 <b>{v:+.2f}</b 个标准差",
-                        unsafe_allow_html=True)
+            st.markdown(f"- **{trait}**：高于平均 {v:+.2f} 个标准差")
         else:
             st.markdown(f"- {trait}：低于平均 {v:+.2f} 个标准差")
 
