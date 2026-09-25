@@ -44,6 +44,9 @@
 | D9 | 回归建模是否去重 | ①直接用全部 32833 行 ②按 track_id 去重 | **②去重后 28356 首**（原始数据 4477 行是同一首歌出现在多个歌单，不去重会导致同一首歌跨训练/测试集，R² 虚高） | 2026-09-25 | 已定 |
 | D10 | GitHub 远程推送方式 | ①HTTPS（凭证管理器弹浏览器登录）②SSH 22 端口 ③SSH 443 端口 | **①HTTPS**（实测：SSH 22 端口被网络拒绝；本机 SSH 密钥是 Gitee 的，未在 GitHub 注册；HTTPS 走凭证管理器正常） | 2026-09-25 | 已完成 |
 | D11 | 仓库可见性 | ①公开 ②私有 | **①公开**（简历项目需给招聘方查看；账号 CJJ-008 原有 2 个仓库均为公开，保持风格一致。如需改为私有：GitHub 仓库 Settings → 最下方 Danger Zone → Change visibility） | 2026-09-25 | 已定 |
+| D12 | 可视化界面方案 | ①仅用现有 Jupyter 报告 ②仅开发 Streamlit 仪表盘 ③两者都要 | **③两者都要**（Jupyter 报告保留 + 新增 Streamlit 歌手推荐器网页） | 2026-09-25 | 已定 |
+| D13 | 仪表盘板块范围 | 数据总览 / 性格画像 / 歌手推荐器 / 模型结果（可多选） | **只做「歌手推荐器」核心板块**（选画像 → 看流派 → 看代表歌手） | 2026-09-25 | 已定 |
+| D14 | 仪表盘是否部署公网 | ①仅本地 localhost ②部署 Streamlit Community Cloud（免费） | **②部署**（得到公开网址可写进简历做"在线演示"；需本人网页授权 GitHub 登录） | 2026-09-25 | 进行中 |
 
 ## 五、数据集档案
 
@@ -87,6 +90,9 @@
 E:\流行音乐数据分析\
 ├── zcode.md              # 本文件：需求与决策记录（入 git）
 ├── README.md             # 简历用项目说明（入 git）
+├── app.py                # Streamlit 歌手推荐器仪表盘（入 git）
+├── requirements.txt      # 锁定版本的依赖清单（入 git，云端部署必需）
+├── .python-version       # 指定 Python 3.12（入 git，云端部署用）
 ├── .gitignore            # 数据、缓存不入库（入 git）
 ├── data/
 │   ├── README.md         # 数据下载指引（入 git）
@@ -101,11 +107,13 @@ E:\流行音乐数据分析\
 │   ├── 05_regression_popularity.py
 │   ├── 06_singer_mapping.py
 │   └── 07_build_report.py  # 程序化生成 Jupyter 分析报告（保证可复现）
+├── scripts/
+│   └── setup_github.sh     # GitHub 远程仓库配置脚本
 ├── notebooks/            # Jupyter 探索草稿
 ├── reports/              # 最终分析报告 Notebook（入 git）
 └── outputs/
     ├── figures/          # 18 张图表 PNG（入 git，简历展示用）
-    └── tables/           # 22 张结果表 CSV（入 git，结论支撑）
+    └── tables/           # 22 张结果表 CSV（入 git，结论支撑 + 仪表盘数据源）
 ```
 
 ## 八、Git 规范
@@ -142,17 +150,33 @@ E:\流行音乐数据分析\
 - [x] GitHub 远程仓库配置与推送完成
       → 仓库地址：<https://github.com/CJJ-008/pop-music-personality-analysis>
       → 远程 main 与本地 HEAD 完全同步（56 个文件），数据文件按 .gitignore 正确排除
+- [x] 修复 03 脚本 DataFrame 碎片化警告（pd.concat 替代逐列赋值，重跑结果不变）
+- [x] Streamlit 歌手推荐器仪表盘（app.py，AppTest 三画像冒烟测试 0 异常 + 服务器健康检查 200）
+- [x] requirements.txt（锁定版本）与 .python-version 部署配置
+- [ ] Streamlit Community Cloud 部署（D14：等我在网页上用 GitHub 账号授权部署，拿到网址后回填 README）
+
+## 九之四、仪表盘说明（app.py）
+
+- **定位**：交互式网页版「性格 × 流行歌手推荐器」，是 Jupyter 图文报告之外的另一种查看方式
+- **数据源**：只读 `outputs/tables/` 里已入库的结果表，不依赖原始数据——克隆仓库或云端部署
+  后无需重新跑分析，冷启动即可用
+- **内容**：侧边栏切换 3 个性格画像 → 画像人口学卡片 + 五维性格雷达图（plotly）→
+  第 1/2 特征流派与相对偏好 → 该流派 Top 歌手条形图与推荐名单
+- **本地运行**：`pip install -r requirements.txt` 后执行 `streamlit run app.py`
+- **已验证**：Streamlit AppTest 三画像切换 0 异常；真实服务器 health check 返回 ok
 
 ## 九之三、项目交付清单
 
 | 交付物 | 位置 | 说明 |
 |--------|------|------|
-| 需求与决策档案 | `zcode.md` | 11 项决策记录、完整结果、踩坑记录 |
+| 需求与决策档案 | `zcode.md` | 14 项决策记录、完整结果、踩坑记录 |
 | 简历用项目说明 | `README.md` | 含核心结论表、技术亮点、局限说明 |
 | 分析报告 | `reports/流行音乐数据分析报告.ipynb` | 26 单元格，已执行验证 0 报错 |
+| 交互式仪表盘 | `app.py` | Streamlit 歌手推荐器，已通过 AppTest 冒烟测试 |
 | 分析脚本 | `src/01`~`07` | 数据获取 → 清洗 → 聚类 → 分类 → 回归 → 映射 → 报告生成 |
 | 图表 | `outputs/figures/` | 18 张，全部中文渲染，已通过视觉检查 |
-| 结果表 | `outputs/tables/` | 22 张 CSV，Excel 可直接打开 |
+| 结果表 | `outputs/tables/` | 22 张 CSV，Excel 可直接打开，也是仪表盘数据源 |
+| 部署配置 | `requirements.txt` + `.python-version` | 锁定版本，Streamlit Cloud 部署必需 |
 | 远程备份 | GitHub `CJJ-008/pop-music-personality-analysis` | 公开仓库，异地备份已完成 |
 
 ## 九之二、实际分析结果（供简历与答辩引用）

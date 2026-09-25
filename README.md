@@ -131,6 +131,10 @@ Spotify 数据 ─► 去重/特征工程 ─► 流行度回归（线性回归 
 ```
 ├── zcode.md              # 项目需求与决策记录
 ├── README.md             # 本文件
+├── app.py                # Streamlit 交互式仪表盘（歌手推荐器）
+├── requirements.txt      # 依赖清单（含锁定版本，部署云端必需）
+├── .python-version       # 指定 Python 版本（3.12）
+├── .gitignore            # 数据、缓存不入库
 ├── data/
 │   ├── README.md         # 数据获取说明
 │   ├── raw/              # 原始数据（不入 git）
@@ -142,18 +146,58 @@ Spotify 数据 ─► 去重/特征工程 ─► 流行度回归（线性回归 
 │   ├── 03_cluster_personality.py # K-Means + 层次聚类、显著性检验
 │   ├── 04_classify_profile.py    # 逻辑回归/决策树/随机森林
 │   ├── 05_regression_popularity.py # 流行度回归 + 消融对比
-│   └── 06_singer_mapping.py      # 画像×歌手映射（核心结论）
+│   ├── 06_singer_mapping.py      # 画像×歌手映射（核心结论）
+│   └── 07_build_report.py        # 程序化生成分析报告 Notebook
 ├── reports/              # 分析报告 Notebook
+├── scripts/setup_github.sh  # GitHub 远程仓库配置脚本
 └── outputs/
     ├── figures/          # 18 张图表
-    └── tables/           # 20+ 张结果表（CSV，Excel 可直接打开）
+    └── tables/           # 22 张结果表（CSV，Excel 可直接打开；也是仪表盘的数据源）
 ```
 
-## 八、如何运行
+## 八、两种可视化界面
+
+本项目有两种查看分析结果的方式：
+
+### 1. Jupyter 分析报告（图文报告式）
+
+`reports/流行音乐数据分析报告.ipynb`，26 个单元格、18 张图表全部内嵌，按分析流程组织。
+打开方式任选其一：
 
 ```bash
-# 1. 环境：Python 3.12 + pandas/numpy/scikit-learn/scipy/matplotlib/seaborn
-pip install pandas numpy scikit-learn scipy matplotlib seaborn kagglehub
+# 方式一：浏览器打开（在项目根目录执行，会自动弹出浏览器）
+jupyter notebook
+
+# 方式二：直接用 PyCharm 双击 reports/流行音乐数据分析报告.ipynb
+```
+
+### 2. Streamlit 交互式仪表盘（网页应用式）
+
+`app.py`——「性格 × 流行歌手推荐器」：侧边栏切换 3 个性格画像，
+实时查看该画像的性格雷达图、偏爱的流派与代表歌手（plotly 互动图表）。
+
+```bash
+pip install -r requirements.txt   # 只需仪表盘时至少要有 streamlit、plotly、pandas
+streamlit run app.py              # 浏览器访问 http://localhost:8501
+```
+
+仪表盘只读取 `outputs/tables/` 下的结果表（已入 git），因此**克隆仓库后无需下载数据、
+无需重跑分析**即可直接运行，也是它可以直接部署上云的原因。
+
+### 云端部署（Streamlit Community Cloud，免费）
+
+1. 打开 [share.streamlit.io](https://share.streamlit.io) → 用 GitHub 账号登录并授权
+2. New app → 选择本仓库（`CJJ-008/pop-music-personality-analysis`）→ 分支 `main` → 主文件 `app.py`
+3. （Advanced settings 里 Python 版本选 3.12，仓库里的 `.python-version` 已声明）
+4. Deploy，约 2~4 分钟后得到 `xxx.streamlit.app` 公开网址
+
+**在线演示：<!-- 部署完成后把网址填在这里，例如 https://pop-music-personality.streamlit.app -->**
+
+## 九、如何运行（完整分析流程）
+
+```bash
+# 1. 环境：Python 3.12，安装锁定版本的依赖（见 requirements.txt）
+pip install -r requirements.txt
 
 # 2. 下载数据（约 8 MB）
 python src/01_download_data.py
@@ -168,7 +212,7 @@ python src/06_singer_mapping.py
 
 运行后 `outputs/figures/` 生成 18 张图表，`outputs/tables/` 生成全部分析结果表。
 
-## 九、Git 版本管理与异地备份
+## 十、Git 版本管理与异地备份
 
 项目使用 git 管理，按分析阶段分 9 次提交（初始化 → 数据 → 清洗EDA → 聚类 → 分类 → 回归 →
 歌手映射 → 报告文档 → 修复），原始数据不入库（可脚本重新获取），图表与结果表入库。
