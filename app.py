@@ -4,6 +4,7 @@
 数据源：只读取 outputs/tables/ 下已入库的分析结果表（不依赖原始数据），
 因此克隆仓库或部署到 Streamlit Community Cloud 后无需重新跑分析、冷启动即可用。
 分析逻辑见 src/，完整分析报告见 reports/。
+登录认证见 auth.py（凭据存 st.secrets，注册用户持久化到 data/users.json）。
 
 本地运行：
     streamlit run app.py
@@ -14,10 +15,15 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from auth import login_gate
+
 ROOT = Path(__file__).resolve().parent
 TAB = ROOT / "outputs" / "tables"
 
 st.set_page_config(page_title="性格 × 流行歌手推荐器", page_icon="🎧", layout="wide")
+
+# ---- 登录门禁：未登录会渲染登录/注册页并中断脚本，通过后继续渲染仪表盘 ----
+authenticator, user_name, user_name_id = login_gate()
 
 
 @st.cache_data
@@ -53,6 +59,10 @@ with st.sidebar:
     options = [f"{p}（{demo.loc[p, '人数']} 人）" for p in PROFILES]
     choice = st.radio("画像", options, label_visibility="collapsed")
     profile = PROFILES[options.index(choice)]
+
+    st.divider()
+    st.caption(f"当前登录：**{user_name or user_name_id}**")
+    authenticator.logout(location="sidebar", button_name="退出登录")
 
     st.divider()
     st.caption(

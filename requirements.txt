@@ -7,6 +7,7 @@
 # ---- 仪表盘 ----
 streamlit==1.64.0
 plotly==7.1.0
+streamlit-authenticator==0.4.2   # 登录/注册认证（依赖 bcrypt、captcha、pillow）
 
 # ---- 数据处理与建模（src/ 分析流程）----
 pandas==3.0.3

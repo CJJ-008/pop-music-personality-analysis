@@ -131,10 +131,13 @@ Spotify 数据 ─► 去重/特征工程 ─► 流行度回归（线性回归 
 ```
 ├── zcode.md              # 项目需求与决策记录
 ├── README.md             # 本文件
-├── app.py                # Streamlit 交互式仪表盘（歌手推荐器）
+├── app.py                # Streamlit 交互式仪表盘（带登录/注册）
+├── auth.py               # 登录认证模块（凭据读取、注册用户持久化）
 ├── requirements.txt      # 依赖清单（含锁定版本，部署云端必需）
 ├── .python-version       # 指定 Python 版本（3.12）
-├── .gitignore            # 数据、缓存不入库
+├── .streamlit/
+│   └── secrets.toml.example  # 凭据配置模板（真实 secrets.toml 已 gitignore）
+├── .gitignore            # 数据、凭据、缓存不入库
 ├── data/
 │   ├── README.md         # 数据获取说明
 │   ├── raw/              # 原始数据（不入 git）
@@ -173,23 +176,56 @@ jupyter notebook
 
 ### 2. Streamlit 交互式仪表盘（网页应用式）
 
-`app.py`——「性格 × 流行歌手推荐器」：侧边栏切换 3 个性格画像，
-实时查看该画像的性格雷达图、偏爱的流派与代表歌手（plotly 互动图表）。
+`app.py`——「性格 × 流行歌手推荐器」：**带登录/注册**，
+登录后可在侧边栏切换 3 个性格画像，实时查看该画像的性格雷达图、偏爱的流派与代表歌手
+（plotly 互动图表）。
 
 ```bash
-pip install -r requirements.txt   # 只需仪表盘时至少要有 streamlit、plotly、pandas
+pip install -r requirements.txt   # 仪表盘至少需要 streamlit、plotly、streamlit-authenticator、pandas
 streamlit run app.py              # 浏览器访问 http://localhost:8501
 ```
 
 仪表盘只读取 `outputs/tables/` 下的结果表（已入 git），因此**克隆仓库后无需下载数据、
 无需重跑分析**即可直接运行，也是它可以直接部署上云的原因。
 
+#### 登录与注册
+
+- **预置账号**配置在 `st.secrets` 里（本地 `.streamlit/secrets.toml`，线上在 Streamlit Cloud 面板配置），
+  **绝不写进代码**——本仓库是公开的，把密码写进 `app.py` 等于发布到全网。
+  可复制模板开始：`.streamlit/secrets.toml.example`
+- **注册功能**：任何人可在「注册」标签自助创建账号，带图形验证码；
+  密码用 **bcrypt 哈希**存储，任何环节都不保存明文
+- **注册用户持久化**：写入 `data/users.json`（已 gitignore）。
+  这一点必须自己实现——`streamlit-authenticator` 的注册只更新内存字典、不落盘，
+  而 Streamlit 每次交互都会重建认证对象，不落盘的话注册完一刷新就没了
+
+> ⚠️ **线上持久化限制**：Streamlit Community Cloud 的文件系统是临时的，
+> 应用重启或重新部署后 `data/users.json` 会被重置，**注册账号会丢失**
+> （secrets 里的预置账号不受影响）。要真正长期保存用户需接外部数据库
+> （如 Supabase/PostgreSQL），属后续扩展。
+>
+> ⚠️ **安全提示**：「必须登录」+「开放注册」的实际效果是"任何人注册一下就能进"，
+> 防护意义有限，主要价值是演示完整的认证流程。
+
 ### 云端部署（Streamlit Community Cloud，免费）
 
 1. 打开 [share.streamlit.io](https://share.streamlit.io) → 用 GitHub 账号登录并授权
 2. New app → 选择本仓库（`CJJ-008/pop-music-personality-analysis`）→ 分支 `main` → 主文件 `app.py`
-3. （Advanced settings 里 Python 版本选 3.12，仓库里的 `.python-version` 已声明）
-4. Deploy，约 2~4 分钟后得到 `xxx.streamlit.app` 公开网址
+3. **Advanced settings → Python version 选 3.12**（仓库里的 `.python-version` 已声明，这步是保险）
+4. **先在 Settings → Secrets 里粘贴登录凭据**（否则线上会停在"未配置账号"提示页）：
+   ```toml
+   [auth]
+   cookie_name = "music_personality_app"
+   cookie_key = "一串足够长的随机字符串"
+   cookie_expiry_days = 7
+
+   [auth.usernames.admin]
+   email = "你的邮箱"
+   first_name = "Admin"
+   last_name = "User"
+   password = "你的强密码"
+   ```
+5. Deploy，约 2~4 分钟后得到 `xxx.streamlit.app` 公开网址
 
 **在线演示：<!-- 部署完成后把网址填在这里，例如 https://pop-music-personality.streamlit.app -->**
 

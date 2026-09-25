@@ -47,6 +47,9 @@
 | D12 | 可视化界面方案 | ①仅用现有 Jupyter 报告 ②仅开发 Streamlit 仪表盘 ③两者都要 | **③两者都要**（Jupyter 报告保留 + 新增 Streamlit 歌手推荐器网页） | 2026-09-25 | 已定 |
 | D13 | 仪表盘板块范围 | 数据总览 / 性格画像 / 歌手推荐器 / 模型结果（可多选） | **只做「歌手推荐器」核心板块**（选画像 → 看流派 → 看代表歌手） | 2026-09-25 | 已定 |
 | D14 | 仪表盘是否部署公网 | ①仅本地 localhost ②部署 Streamlit Community Cloud（免费） | **②部署**（得到公开网址可写进简历做"在线演示"；需本人网页授权 GitHub 登录） | 2026-09-25 | 进行中 |
+| D15 | 仪表盘认证方式 | ①自写密码登录（bcrypt+secrets）②Streamlit 原生 OAuth（Google/GitHub）③多用户库 streamlit-authenticator | **③多用户库**（自带登录/注册界面、bcrypt 哈希、图形验证码、Cookie 记住登录） | 2026-09-25 | 已定 |
+| D16 | 访问控制策略 | ①必须登录 ②保留游客入口 ③登录页给演示账号 | **①必须登录**（已如实记录副作用：配合"开放注册"后实际是"任何人注册即可进"，防护意义有限，主要价值是演示完整认证流程） | 2026-09-25 | 已定 |
+| D17 | 是否支持注册 | ①仅固定账号 ②支持自助注册 | **②支持注册**（带图形验证码；注册用户持久化到 data/users.json） | 2026-09-25 | 已定 |
 
 ## 五、数据集档案
 
@@ -153,7 +156,35 @@ E:\流行音乐数据分析\
 - [x] 修复 03 脚本 DataFrame 碎片化警告（pd.concat 替代逐列赋值，重跑结果不变）
 - [x] Streamlit 歌手推荐器仪表盘（app.py，AppTest 三画像冒烟测试 0 异常 + 服务器健康检查 200）
 - [x] requirements.txt（锁定版本）与 .python-version 部署配置
+- [x] 仪表盘登录/注册功能（D15~D17）：auth.py + streamlit-authenticator 0.4.2
+      → 凭据存 st.secrets（只提交 .example 模板），密码 bcrypt 哈希，图形验证码
+      → 注册用户持久化到 data/users.json（库自身不落盘，必须自己实现）
+      → 已测：门禁零泄漏、正确/错误密码、注册落盘无明文、全新会话下两类账号均可登录
 - [ ] Streamlit Community Cloud 部署（D14：等我在网页上用 GitHub 账号授权部署，拿到网址后回填 README）
+
+## 九之五、认证功能的技术细节与已知限制
+
+### 实现要点
+- **凭据来源**：`st.secrets`（本地 `.streamlit/secrets.toml` / 线上 Cloud 面板），
+  仓库只提交 `.streamlit/secrets.toml.example` 模板；真实 secrets 与 `data/users.json` 均已 gitignore
+- **密码存储**：bcrypt 哈希（`$2b$` 开头），任何环节不保存明文；已验证提交内容无明文泄漏
+- **注册持久化**：库的 `register_user` 只改内存字典、不写文件，而 Streamlit 每次交互
+  都会重建认证对象 → 自己实现 `data/users.json` 读写，与 secrets 预置账号合并（同名以预置账号优先）
+- **安全测试**：未登录时仪表盘内容零泄漏；错误密码/不存在用户均被拦截
+
+### 踩到的两个坑
+1. `st.secrets` 是**只读对象**，而库内部要回写哈希后的密码 →
+   `TypeError: Secrets does not support item assignment`。
+   浅拷贝无效（嵌套层仍只读），须递归深拷贝为普通 dict。
+2. `Authenticate` 视图对象**不暴露** `credentials`，它在
+   `authentication_controller.authentication_model.credentials`；已做多路径兜底。
+
+### 已知限制（如实记录，不可对外夸大）
+1. **线上注册账号不持久**：Streamlit Community Cloud 文件系统是临时的，应用重启/
+   重新部署后 `data/users.json` 被重置，注册账号丢失（secrets 预置账号不受影响）。
+   真正长期持久化需接外部数据库（Supabase/PostgreSQL），属后续扩展。
+2. **防护意义有限**：D16 选"必须登录"同时 D17 选"支持注册"，实际效果是
+   "任何人注册一下就能进"，安全性提升有限，价值在于演示完整认证流程。
 
 ## 九之四、仪表盘说明（app.py）
 
@@ -169,14 +200,14 @@ E:\流行音乐数据分析\
 
 | 交付物 | 位置 | 说明 |
 |--------|------|------|
-| 需求与决策档案 | `zcode.md` | 14 项决策记录、完整结果、踩坑记录 |
+| 需求与决策档案 | `zcode.md` | 17 项决策记录、完整结果、踩坑记录 |
 | 简历用项目说明 | `README.md` | 含核心结论表、技术亮点、局限说明 |
 | 分析报告 | `reports/流行音乐数据分析报告.ipynb` | 26 单元格，已执行验证 0 报错 |
-| 交互式仪表盘 | `app.py` | Streamlit 歌手推荐器，已通过 AppTest 冒烟测试 |
+| 交互式仪表盘 | `app.py` + `auth.py` | Streamlit 歌手推荐器 + 登录注册认证 |
 | 分析脚本 | `src/01`~`07` | 数据获取 → 清洗 → 聚类 → 分类 → 回归 → 映射 → 报告生成 |
 | 图表 | `outputs/figures/` | 18 张，全部中文渲染，已通过视觉检查 |
 | 结果表 | `outputs/tables/` | 22 张 CSV，Excel 可直接打开，也是仪表盘数据源 |
-| 部署配置 | `requirements.txt` + `.python-version` | 锁定版本，Streamlit Cloud 部署必需 |
+| 部署配置 | `requirements.txt` + `.python-version` + `.streamlit/secrets.toml.example` | 锁定版本与凭据模板 |
 | 远程备份 | GitHub `CJJ-008/pop-music-personality-analysis` | 公开仓库，异地备份已完成 |
 
 ## 九之二、实际分析结果（供简历与答辩引用）

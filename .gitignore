@@ -10,9 +10,13 @@ __pycache__/
 *.egg-info/
 .ipynb_checkpoints/
 
-# ---- 凭据与环境 ----
+# ---- 凭据与环境（仓库是公开的，绝不能提交任何密码或密钥）----
 .env
 kaggle.json
+.streamlit/secrets.toml
+
+# 注册用户的密码哈希（bcrypt）与用户信息，属于运行时数据
+data/users.json
 
 # ---- ZCode 本地工作文件 ----
 .zcode/
