@@ -246,6 +246,64 @@ else:
                               selection_mode="multi")
             selected.extend(picked)
 
+    # ---- 标签栏左右滚动按钮 ----
+    # pills 行内容超宽时被静默截断（容器 overflow:auto 但无可见滚动条，鼠标无法拖动）。
+    # 注入分两半：CSS 用 st.html（样式能生效，但脚本不会执行）；JS 必须用
+    # components.html 的 srcdoc 同源 iframe——它可以从 iframe 内部操作父页面 DOM。
+    st.html("""
+<style>
+  div[data-testid="stButtonGroup"] > div { scrollbar-width: none; }
+  div[data-testid="stButtonGroup"] > div::-webkit-scrollbar { display: none; }
+  .tag-scroll-btn {
+    position: absolute; top: 50%; transform: translateY(-50%);
+    z-index: 20; width: 26px; height: 26px; border-radius: 50%;
+    border: 1px solid rgba(250,250,250,.3);
+    background: rgba(30,30,30,.85); color: #fafafa;
+    font-size: 15px; line-height: 1; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .tag-scroll-btn:hover { background: rgba(90,90,90,.95); }
+  .tag-scroll-btn.left { left: 2px; }
+  .tag-scroll-btn.right { right: 2px; }
+</style>
+""")
+    import streamlit.components.v1 as components
+
+    components.html("""
+<script>
+(function () {
+  var doc = window.parent.document;
+  var tries = 0;
+  function setup() {
+    doc.querySelectorAll('[data-testid="stButtonGroup"] > div').forEach(function (row) {
+      if (row.dataset.navReady === "1") return;
+      if (row.scrollWidth <= row.clientWidth + 4) return;  // 没溢出的行不需要按钮
+      row.dataset.navReady = "1";
+      var wrap = row.parentElement;
+      wrap.style.position = "relative";
+      function mkBtn(side, label, dx) {
+        var b = doc.createElement("button");
+        b.className = "tag-scroll-btn " + side;
+        b.textContent = label;
+        b.title = side === "left" ? "向左滚动" : "向右滚动";
+        b.addEventListener("click", function (e) {
+          e.preventDefault();
+          row.scrollBy({ left: dx, behavior: "smooth" });
+        });
+        wrap.appendChild(b);
+      }
+      mkBtn("left", "‹", -220);
+      mkBtn("right", "›", 220);
+    });
+    var remaining = [...doc.querySelectorAll('[data-testid="stButtonGroup"] > div')]
+      .filter(function (r) { return r.dataset.navReady !== "1"; }).length;
+    if (remaining && tries++ < 25) setTimeout(setup, 300);
+  }
+  setup();
+})();
+</script>
+""", height=1)
+
     # 互斥提示：双极成对标签同时选择会相互抵消
     pairs = [("外向爱社交", "安静内向"), ("自律可靠", "随性散漫"),
              ("情绪稳定", "感性敏感"), ("好奇开放", "务实传统"),

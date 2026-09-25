@@ -34,7 +34,7 @@ COHORT_TOP_PCT = 0.30  # 每个标签取最符合的前 30% 作为参考人群
 # (标签名, 分组, [(问卷列, 方向)], 描述)；方向 +1=列高分代表该标签，-1=反向计分
 # 二值标签（人口背景）用 (列, "match", 匹配值) 表示
 TAG_LIBRARY = [
-    # ---- 性格特质（5 对双极，10 个）----
+    # ---- 性格特质（6 对双极，12 个）----
     ("外向爱社交", "性格特质", [("Fun with friends", 1), ("Socializing", 1),
                         ("Number of friends", 1), ("Entertainment spending", 1)],
      "喜欢热闹、朋友多、社交活动丰富"),
@@ -69,7 +69,11 @@ TAG_LIBRARY = [
     ("直率独立", "性格特质", [("Empathy", -1), ("Compassion to animals", -1),
                         ("Giving", -1), ("Charity", -1), ("Borrowed stuff", -1)],
      "有主见、以自我目标为先"),
-    # ---- 生活方式（8 个）----
+    ("乐观开朗", "性格特质", [("Funniness", 1), ("Happiness in life", 1)],
+     "爱开玩笑、对生活满意度高"),
+    ("自我反省", "性格特质", [("Self-criticism", 1), ("Judgment calls", 1)],
+     "常自我审视、做事反复权衡"),
+    # ---- 生活方式（10 个）----
     ("运动健将", "生活方式", [("Active sport", 1), ("Adrenaline sports", 1),
                         ("Passive sport", 1)],
      "热爱运动，包括观赛与亲身上阵"),
@@ -89,7 +93,11 @@ TAG_LIBRARY = [
      "关注理财与经济事务"),
     ("追星族", "生活方式", [("Celebrities", 1)],
      "关注名人明星动态"),
-    # ---- 兴趣爱好（6 个）----
+    ("工作狂", "生活方式", [("Workaholism", 1), ("Writing notes", 1)],
+     "做事拼命、投入大量时间在工作学习上"),
+    ("数码控", "生活方式", [("Spending on gadgets", 1)],
+     "在电子产品上舍得花钱"),
+    # ---- 兴趣爱好（12 个）----
     ("文艺青年", "兴趣爱好", [("Theatre", 1), ("Art exhibitions", 1), ("Writing", 1)],
      "喜欢戏剧、展览与写作"),
     ("科技极客", "兴趣爱好", [("Science and technology", 1), ("Physics", 1),
@@ -104,11 +112,25 @@ TAG_LIBRARY = [
     ("爱好自然", "兴趣爱好", [("Countryside, outdoors", 1), ("Gardening", 1),
                         ("Biology", 1)],
      "喜欢户外、园艺与生物"),
-    # ---- 人口背景（2 个，二值）----
+    ("恐怖片迷", "兴趣爱好", [("Horror", 1), ("Thriller", 1)],
+     "爱看恐怖、惊悚题材"),
+    ("喜剧控", "兴趣爱好", [("Comedy", 1)],
+     "爱看喜剧、追求轻松欢乐"),
+    ("浪漫主义", "兴趣爱好", [("Romantic", 1), ("Fantasy/Fairy tales", 1)],
+     "偏爱浪漫与奇幻题材"),
+    ("科幻迷", "兴趣爱好", [("Sci-fi", 1)],
+     "热爱科幻设定与脑洞"),
+    ("动画爱好者", "兴趣爱好", [("Animated", 1)],
+     "喜欢动画作品"),
+    ("动作片迷", "兴趣爱好", [("Action", 1), ("Western", 1)],
+     "偏爱动作、西部等硬核题材"),
+    # ---- 人口背景（3 个）----
     ("城市青年", "人口背景", [("Village - town", "match", "city")],
      "成长于城市"),
     ("小镇青年", "人口背景", [("Village - town", "match", "village")],
      "成长于乡镇"),
+    ("独生子女", "人口背景", [("Only child", "match", "yes")],
+     "家中没有兄弟姐妹"),
 ]
 
 
@@ -171,7 +193,7 @@ def main() -> None:
         flag = "OK" if (expect is None or (expect == "pos") == (v > 0)) else "不符合预期!"
         print(f"  {tag} -> {genre}: {v:+.3f} {flag}")
 
-    print(f"\n[标签] 26 个标签的流派亲和度摘要（每个标签 Top2 流派）:")
+    print(f"\n[标签] 流派亲和度摘要（每个标签 Top2 流派）:")
     for name in affinity.index:
         top2 = affinity.loc[name].sort_values(ascending=False).head(2)
         print(f"  {name}: " + ", ".join(f"{g} {v:+.2f}" for g, v in top2.items()))

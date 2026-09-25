@@ -9,6 +9,8 @@
 务实传统,性格特质,关注现实事务，对文艺兴趣一般,最符合的前30%,306,Art exhibitions、Theatre、Reading、Foreign languages、Psychology、Writing
 友善体贴,性格特质,有共情心、乐于助人与付出,最符合的前30%,327,Empathy、Compassion to animals、Giving、Charity、Borrowed stuff
 直率独立,性格特质,有主见、以自我目标为先,最符合的前30%,321,Empathy、Compassion to animals、Giving、Charity、Borrowed stuff
+乐观开朗,性格特质,爱开玩笑、对生活满意度高,最符合的前30%,360,Funniness、Happiness in life
+自我反省,性格特质,常自我审视、做事反复权衡,最符合的前30%,320,Self-criticism、Judgment calls
 运动健将,生活方式,热爱运动，包括观赛与亲身上阵,最符合的前30%,413,Active sport、Adrenaline sports、Passive sport
 居家宅,生活方式,上网时间长，偏好待在室内,最符合的前30%,344,"Internet、PC、Countryside, outdoors、Active sport"
 购物达人,生活方式,喜欢逛街买东西、认品牌,最符合的前30%,412,Shopping、Shopping centres、Branded clothing
@@ -17,11 +19,20 @@
 健康饮食,生活方式,注重饮食健康,最符合的前30%,322,Healthy eating、Spending on healthy eating
 精打细算,生活方式,关注理财与经济事务,最符合的前30%,312,Finances、Economy Management
 追星族,生活方式,关注名人明星动态,最符合的前30%,431,Celebrities
+工作狂,生活方式,做事拼命、投入大量时间在工作学习上,最符合的前30%,440,Workaholism、Writing notes
+数码控,生活方式,在电子产品上舍得花钱,最符合的前30%,322,Spending on gadgets
 文艺青年,兴趣爱好,喜欢戏剧、展览与写作,最符合的前30%,354,Theatre、Art exhibitions、Writing
 科技极客,兴趣爱好,对科学技术与电脑感兴趣,最符合的前30%,382,Science and technology、Physics、Chemistry、PC
 书虫,兴趣爱好,热爱阅读,最符合的前30%,452,Reading
 影视爱好者,兴趣爱好,热爱电影与纪录片,最符合的前30%,465,Movies、Documentary
 历史政治迷,兴趣爱好,关注历史、政治与地理,最符合的前30%,416,History、Politics、Geography
 爱好自然,兴趣爱好,喜欢户外、园艺与生物,最符合的前30%,313,"Countryside, outdoors、Gardening、Biology"
+恐怖片迷,兴趣爱好,爱看恐怖、惊悚题材,最符合的前30%,322,Horror、Thriller
+喜剧控,兴趣爱好,爱看喜剧、追求轻松欢乐,最符合的前30%,647,Comedy
+浪漫主义,兴趣爱好,偏爱浪漫与奇幻题材,最符合的前30%,469,Romantic、Fantasy/Fairy tales
+科幻迷,兴趣爱好,热爱科幻设定与脑洞,最符合的前30%,404,Sci-fi
+动画爱好者,兴趣爱好,喜欢动画作品,最符合的前30%,387,Animated
+动作片迷,兴趣爱好,偏爱动作、西部等硬核题材,最符合的前30%,312,Action、Western
 城市青年,人口背景,成长于城市,匹配组(city),711,Village - town
 小镇青年,人口背景,成长于乡镇,匹配组(village),299,Village - town
+独生子女,人口背景,家中没有兄弟姐妹,匹配组(yes),254,Only child
