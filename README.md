@@ -152,7 +152,8 @@ Spotify 数据 ─► 去重/特征工程 ─► 流行度回归（线性回归 
 │   ├── 04_classify_profile.py    # 逻辑回归/决策树/随机森林
 │   ├── 05_regression_popularity.py # 流行度回归 + 消融对比
 │   ├── 06_singer_mapping.py      # 画像×歌手映射（核心结论）
-│   └── 07_build_report.py        # 程序化生成分析报告 Notebook
+│   ├── 07_build_report.py        # 程序化生成分析报告 Notebook
+│   └── 08_tag_recommender.py     # 性格标签×流派亲和度矩阵（标签推荐页数据源）
 ├── reports/              # 分析报告 Notebook
 ├── scripts/setup_github.sh  # GitHub 远程仓库配置脚本
 └── outputs/
@@ -178,9 +179,15 @@ jupyter notebook
 
 ### 2. Streamlit 交互式仪表盘（网页应用式）
 
-`app.py`——「性格 × 流行歌手推荐器」：**带登录/注册**，
-登录后可在侧边栏切换 3 个性格画像，实时查看该画像的性格雷达图、偏爱的流派与代表歌手
-（plotly 互动图表）。
+`app.py`——「性格 × 流行歌手推荐器」：**带登录/注册**，含两种推荐方式
+（侧边栏切换）：
+
+- **按画像推荐**：3 个 K-Means 性格画像，展示性格雷达图、流派偏好与代表歌手；
+- **按性格标签找歌手**：自由勾选 **26 个性格/生活方式/兴趣标签**（如"好奇开放 +
+  书虫 + 追星族"），系统从问卷中圈出最符合这些特征的人群，用他们的真实偏好
+  实时合成流派与歌手推荐——标签 × 流派亲和度矩阵由 `src/08_tag_recommender.py`
+  预计算（每标签取问卷最符合的前 30% 人群，流派亲和度 = 人群均分 − 全体均分），
+  推荐依据在页面底部可展开核查。
 
 ```bash
 pip install -r requirements.txt   # 仪表盘至少需要 streamlit、plotly、streamlit-authenticator、pandas
