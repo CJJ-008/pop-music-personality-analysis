@@ -95,6 +95,15 @@ def clean_survey() -> pd.DataFrame:
     for c in DEMO_CATEGORICAL:
         df[c] = df[c].fillna(df[c].mode()[0])
 
+    # 其余数值列（兴趣爱好等）也统一中位数填补，保证后续聚类/分类脚本拿到干净矩阵
+    num_cols = [c for c in df.columns
+                if pd.api.types.is_numeric_dtype(df[c]) and c not in scale_cols]
+    rest_na = int(df[num_cols].isna().sum().sum())
+    if rest_na:
+        df[num_cols] = df[num_cols].fillna(df[num_cols].median())
+        print(f"[问卷] 其余 {len(num_cols)} 个数值列中位数填补 {rest_na} 个缺失值")
+    print(f"[问卷] 填补后剩余缺失值: {int(df.isna().sum().sum())}")
+
     # 合成大五人格代理指标（情绪稳定 = 6 - 负向题均值，即反向计分到 1-5）
     trait_scores = {}
     for trait, items in BIG_FIVE_ITEMS.items():
