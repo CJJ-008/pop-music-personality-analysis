@@ -1,0 +1,18 @@
+# 本文件供 Streamlit Community Cloud 部署与本地环境复现使用。
+# 版本与本项目实际验证环境一致（Python 3.12，见 .python-version）。
+#
+# 前两行是网页仪表盘 app.py 的运行依赖；
+# 其余是复现 src/ 全分析流程（数据下载→清洗→建模）所需的库。
+
+# ---- 仪表盘 ----
+streamlit==1.64.0
+plotly==7.1.0
+
+# ---- 数据处理与建模（src/ 分析流程）----
+pandas==3.0.3
+numpy==2.5.0
+scikit-learn==1.9.0
+scipy==1.18.0
+matplotlib==3.11.0
+seaborn==0.13.2
+kagglehub==1.0.2
