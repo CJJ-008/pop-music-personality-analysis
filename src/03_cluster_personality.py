@@ -124,8 +124,13 @@ def main() -> None:
     print(f"[聚类] 层次聚类对比：与 K-Means 的 ARI = {ari:.3f}（越接近 1 越一致）")
 
     names = name_profiles(df, km_labels)
-    df["cluster"] = km_labels
-    df["cluster_name"] = df["cluster"].map(names)
+    # 一次性合并聚类标签（逐列 insert 会造成 DataFrame 碎片化并触发 PerformanceWarning）
+    cluster_info = pd.DataFrame(
+        {"cluster": km_labels,
+         "cluster_name": pd.Series(km_labels, index=df.index).map(names)},
+        index=df.index,
+    )
+    df = pd.concat([df, cluster_info], axis=1)
     print("[聚类] 性格画像命名:")
     for cid, nm in names.items():
         n = int((km_labels == cid).sum())
