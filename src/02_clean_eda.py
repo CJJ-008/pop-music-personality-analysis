@@ -139,8 +139,10 @@ def eda_survey(df: pd.DataFrame) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(11, 4))
     axes[0].hist(df["Age"].dropna(), bins=16, color="#4c72b0", edgecolor="white")
     axes[0].set_title("年龄分布（15~30 岁）"); axes[0].set_xlabel("年龄")
-    df["Gender"].value_counts().plot(kind="bar", ax=axes[1], color="#dd8452")
-    axes[1].set_title("性别构成"); axes[1].tick_params(axis="x", rotation=0)
+    gender_cn = df["Gender"].map({"female": "女", "male": "男"}).value_counts()
+    gender_cn.plot(kind="bar", ax=axes[1], color="#dd8452")
+    axes[1].set_title("性别构成"); axes[1].set_xlabel("性别")
+    axes[1].tick_params(axis="x", rotation=0)
     fig.suptitle("图2 受访者人口学概况")
     save_fig(fig, "fig02_survey_age_gender.png")
 

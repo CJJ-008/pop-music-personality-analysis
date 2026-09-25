@@ -44,6 +44,13 @@ UNMAPPED_CN = ["民谣", "乡村", "古典", "音乐剧", "歌剧"]
 MIN_SONGS = 10  # 歌手入选门槛：至少这么多首歌，避免单曲偶然高流行度
 
 
+def esc(text: str) -> str:
+    """转义 $ 符号：matplotlib 会把 $...$ 当 LaTeX 数学公式解析，
+    导致歌手名（如 $uicideBoy$）的美元符号被吞掉、字变成斜体。
+    """
+    return str(text).replace("$", r"\$")
+
+
 def load() -> tuple[pd.DataFrame, pd.DataFrame]:
     survey = pd.read_csv(SURVEY_CLUSTER_CSV)
     spotify = pd.read_csv(SPOTIFY_CLEAN_CSV).drop_duplicates(subset="track_id")
@@ -161,14 +168,16 @@ def main() -> None:
 
     # ---- 5. 可视化：每个画像的 Top 歌手 ----
     profiles = concl["性格画像"].unique().tolist()
-    fig, axes = plt.subplots(1, len(profiles), figsize=(5.2 * len(profiles), 5.5))
+    # wspace 留足间距：歌手名较长时，y 轴标签会伸到相邻子图区域被遮挡
+    fig, axes = plt.subplots(1, len(profiles), figsize=(6.2 * len(profiles), 5.5),
+                             gridspec_kw={"wspace": 0.5})
     if len(profiles) == 1:
         axes = [axes]
     for ax, profile in zip(axes, profiles):
         gcn = concl[(concl["性格画像"] == profile) &
                     (concl["偏好排名"] == "第1特征流派")]["特征流派"].iloc[0]
         sub = artists_df[artists_df["Spotify流派"] == gcn].head(6).iloc[::-1]
-        ax.barh(sub["歌手"], sub["平均流行度"], color="#4c72b0")
+        ax.barh([esc(a) for a in sub["歌手"]], sub["平均流行度"], color="#4c72b0")
         ax.set_title(f"{profile}\n第1特征流派：{gcn}", fontsize=9)
         ax.set_xlabel("平均流行度")
         ax.tick_params(axis="y", labelsize=8)
