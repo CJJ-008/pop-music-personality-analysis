@@ -1,0 +1,18 @@
+# ---- 数据文件（体积大、可重新获取；下载方法见 data/README.md）----
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# ---- 凭据与环境 ----
+.env
+kaggle.json
+
+# ---- 大型二进制输出 ----
+outputs/models/
