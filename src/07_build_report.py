@@ -307,3 +307,16 @@ nb.metadata = {
 OUT.parent.mkdir(parents=True, exist_ok=True)
 nbf.write(nb, str(OUT))
 print(f"已生成: {OUT.relative_to(ROOT)}（{len(C)} 个单元格）")
+
+# ---- 追加：导出自包含 HTML 版（供仪表盘/离线下载，无需 Python 即可打开）----
+import subprocess
+
+html_out = ROOT / "reports" / "分析报告.html"
+cmd = [sys.executable, "-m", "jupyter", "nbconvert", "--to", "html",
+       str(OUT), "--output", html_out.name, "--output-dir", str(html_out.parent)]
+r = subprocess.run(cmd, capture_output=True, text=True)
+if r.returncode == 0 and html_out.exists():
+    print(f"已生成: {html_out.relative_to(ROOT)}（{html_out.stat().st_size / 1024 / 1024:.1f} MB，自包含）")
+else:
+    print("HTML 导出失败（不影响 Notebook 本身）:")
+    print((r.stderr or r.stdout)[-500:])

@@ -168,13 +168,20 @@ Spotify 数据 ─► 去重/特征工程 ─► 流行度回归（线性回归 
 ### 1. Jupyter 分析报告（图文报告式）
 
 `reports/流行音乐数据分析报告.ipynb`，26 个单元格、18 张图表全部内嵌，按分析流程组织。
-打开方式任选其一：
+打开方式任选其一，**另有三个免安装入口**：
+
+- **应用内直达**：运行仪表盘（或 exe）后，侧边栏"📖 完整分析报告"区可
+  在线查看或下载离线 HTML 版；
+- **在线渲染**：GitHub 直接打开
+  [reports/流行音乐数据分析报告.ipynb](https://github.com/CJJ-008/pop-music-personality-analysis/blob/main/reports/%E6%B5%81%E8%A1%8C%E9%9F%B3%E4%B9%90%E6%95%B0%E6%8D%AE%E5%88%86%E6%9E%90%E6%8A%A5%E5%91%8A.ipynb)，图表全部渲染；
+- **离线 HTML**：`reports/分析报告.html`（自包含单文件，双击即开，由
+  `src/07_build_report.py` 自动导出）。
 
 ```bash
-# 方式一：浏览器打开（在项目根目录执行，会自动弹出浏览器）
+# 在 Jupyter 里交互查看（在项目根目录执行，会自动弹出浏览器）
 jupyter notebook
 
-# 方式二：直接用 PyCharm 双击 reports/流行音乐数据分析报告.ipynb
+# 或直接用 PyCharm 双击 reports/流行音乐数据分析报告.ipynb
 ```
 
 ### 2. Streamlit 交互式仪表盘（网页应用式）

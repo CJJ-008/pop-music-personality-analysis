@@ -16,6 +16,7 @@
 """
 import json
 from pathlib import Path
+from urllib.parse import quote
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -137,7 +138,25 @@ with st.sidebar:
         "再结合画像的流派偏好与各流派 Top 歌手给出推荐。\n\n"
         f"画像间流派偏好差异经 Kruskal-Wallis 检验，17 个流派中 15 个显著（p<0.05）。"
     )
-    st.caption("完整分析报告见仓库 reports/流行音乐数据分析报告.ipynb")
+
+    # ---- 完整分析报告入口（在线 + 离线）----
+    st.divider()
+    st.markdown("**📖 完整分析报告**")
+    st.caption("想知道推荐结论是怎么算出来的？看这份全流程分析报告")
+    _repo = "https://github.com/CJJ-008/pop-music-personality-analysis"
+    report_url = f"{_repo}/blob/main/reports/{quote('流行音乐数据分析报告.ipynb')}"
+    st.link_button("🔎 在线查看（GitHub 渲染）", report_url, use_container_width=True)
+    html_path = RESOURCE_DIR / "reports" / "分析报告.html"
+    if html_path.exists():
+        st.download_button(
+            "📥 下载离线报告（HTML）",
+            data=html_path.read_bytes(),
+            file_name="流行音乐数据分析报告.html",
+            mime="text/html",
+            use_container_width=True,
+            help="自包含单文件，双击即可在浏览器打开，无需安装 Python")
+    else:
+        st.caption("离线 HTML 版未打包：源码运行时执行 src/07_build_report.py 生成")
 
 # ============================================================ 页面1: 画像 ====
 if page == "按画像推荐":
