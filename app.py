@@ -117,7 +117,7 @@ def recommend_section(genre_cn: str) -> None:
 
 # ---------------------------------------------------------------- 侧边栏 ----
 with st.sidebar:
-    page = st.radio("推荐方式", ["按画像推荐", "按性格标签找歌手"],
+    page = st.radio("推荐方式", ["按画像推荐", "按性格标签找歌手", "性格小测评"],
                     label_visibility="collapsed")
 
     if page == "按画像推荐":
@@ -230,7 +230,7 @@ if page == "按画像推荐":
     )
 
 # ============================================================ 页面2: 标签 ====
-else:
+elif page == "按性格标签找歌手":
     groups = json.loads((TAB / "tag_groups.json").read_text(encoding="utf-8"))
 
     st.title("🏷️ 按性格标签找歌手")
@@ -398,3 +398,134 @@ else:
     st.caption("**结论口径说明**：标签亲和度来自问卷 1-5 打分与全体均值的差，"
                "歌手匹配只覆盖 Spotify 数据集的六大流派；结论是**画像层面的群体倾向**，"
                "不是个体因果关系。")
+
+# ============================================================ 页面3: 测评 ====
+else:
+    QUIZ_TRAITS = ["外向社交", "尽责自律", "情绪稳定", "开放好奇", "宜人友善"]
+    SCALE = ["1 完全不同意", "2 比较不同意", "3 一般", "4 比较同意", "5 完全同意"]
+    questions = json.loads((TAB / "quiz_questions.json").read_text(encoding="utf-8"))
+    stats = load_csv("quiz_population_stats.csv", index_col=True)
+    basis = load_csv("quiz_basis.csv", index_col=True)
+
+    st.title("📝 性格小测评")
+    st.caption("回答 25 道小题，系统会从 1010 名问卷受访者中找出与你性格最像的人群，"
+               "用他们的真实音乐偏好为你推荐流派与歌手")
+
+    with st.form("quiz_form", clear_on_submit=False):
+        saved = st.session_state.get("quiz_saved", {})
+        qn = 0
+        for dim in QUIZ_TRAITS:
+            st.markdown(f"**{dim}**")
+            if dim == "情绪稳定":
+                st.caption("本组题目按你的真实感受选择即可，系统会自动换算")
+            for q in questions:
+                if q["维度"] != dim:
+                    continue
+                qn += 1
+                st.radio(f"{qn}. {q['题干']}", SCALE,
+                         index=saved.get(qn), horizontal=True, key=f"quiz_{qn}")
+        submitted = st.form_submit_button("提交，看我的音乐人格", use_container_width=True)
+        _ = submitted  # 提交按钮触发重跑；结果在下方按"是否答完"统一渲染
+
+    answers = [st.session_state.get(f"quiz_{i}") for i in range(1, len(questions) + 1)]
+    if any(a is None for a in answers):
+        st.info("还有题目没答完。答完 25 题并点击提交，即可生成你的音乐人格与专属推荐")
+        st.stop()
+
+    # ---- 计分：与 02/09 脚本同口径（反向题 6-分值，维度取均值）----
+    user_raw = {t: [] for t in QUIZ_TRAITS}
+    for i, q in enumerate(questions):
+        v = int(answers[i][0])
+        if q["反向计分"]:
+            v = 6 - v
+        user_raw[q["维度"]].append(v)
+    user_trait = {t: sum(v) / len(v) for t, v in user_raw.items()}
+    st.session_state["quiz_saved"] = {i: int(a[0]) for i, a in enumerate(answers, 1)}
+
+    user_z = pd.Series({t: (user_trait[t] - stats.loc[t, "均值"]) / stats.loc[t, "标准差"]
+                        for t in QUIZ_TRAITS})
+
+    # ---- KNN：五维 z 空间里找最相似的 10% 人群 ----
+    zcols = [c for c in basis.columns if c.startswith("z_")]
+    dist = ((basis[zcols] - user_z) ** 2).sum(axis=1) ** 0.5
+    k = max(50, int(round(len(basis) * 0.10)))
+    cohort_idx = dist.nsmallest(k).index
+    genre_cols = [c for c in basis.columns if not c.startswith("z_")]
+    aff = (basis.loc[cohort_idx, genre_cols].mean() - basis[genre_cols].mean())
+    aff_sorted = aff.sort_values(ascending=False)
+
+    st.success(f"提交成功！从问卷中找到了 **{k} 位与你性格最像的人**（最相似前 10%），"
+               "以下是他们的真实音乐偏好")
+    st.subheader("你的音乐人格")
+    col_radar, col_read = st.columns([2, 3])
+    with col_radar:
+        fig = go.Figure()
+        fig.add_trace(go.Scatterpolar(
+            r=[user_z[c] for c in QUIZ_TRAITS] + [user_z[QUIZ_TRAITS[0]]],
+            theta=QUIZ_TRAITS + [QUIZ_TRAITS[0]],
+            fill="toself", line_color="#c44e52", name="你"))
+        fig.add_trace(go.Scatterpolar(
+            r=[0] * (len(QUIZ_TRAITS) + 1), theta=QUIZ_TRAITS + [QUIZ_TRAITS[0]],
+            mode="lines", line=dict(dash="dot", color="gray"),
+            showlegend=False, hoverinfo="skip"))
+        fig.update_layout(
+            polar=dict(radialaxis=dict(title="z-score（0=全体平均）")),
+            height=380, margin=dict(l=50, r=50, t=30, b=30), showlegend=False)
+        st.plotly_chart(fig, width="stretch")
+    with col_read:
+        st.markdown("你的五维得分（1-5 分制）与 1010 人平均水平对比：")
+        for t in QUIZ_TRAITS:
+            dz = user_z[t]
+            tone = "**" if dz > 0.3 or dz < -0.3 else ""
+            direction = "高于" if dz > 0 else "低于"
+            st.markdown(f"- {tone}{t}{tone}：{user_trait[t]:.2f} 分，"
+                        f"{direction}全体平均 {dz:+.2f} 个标准差")
+
+    st.subheader("和你最像的人偏爱哪些流派")
+    st.caption(f"流派亲和度 = 与你最像的 {k} 人的流派均分 − 全体均分；"
+               "红色流派在歌曲数据集中无对应歌手，仅作偏好参考")
+    sorted_genres = aff_sorted.index.tolist()
+    fig2 = go.Figure(go.Bar(
+        x=aff_sorted.values[::-1], y=sorted_genres[::-1], orientation="h",
+        marker_color=["#c44e52" if g in UNMAPPED_GENRES else "#4c72b0"
+                      for g in sorted_genres[::-1]],
+        text=[f"{v:+.2f}" for v in aff_sorted.values[::-1]], textposition="outside",
+        hovertemplate="%{y}<br>流派亲和度 %{x:+.2f}<extra></extra>"))
+    fig2.update_layout(
+        height=max(380, 26 * len(sorted_genres)),
+        xaxis_title="流派亲和度（相对全体的偏好差异）",
+        margin=dict(l=10, r=40, t=10, b=10))
+    st.plotly_chart(fig2, width="stretch")
+
+    st.subheader("为你推荐的歌手")
+    sp_scores: dict[str, list[float]] = {}
+    for gcn, v in aff.items():
+        target = CN2SP.get(gcn)
+        if target:
+            sp_scores.setdefault(target, []).append(v)
+    sp_aff = {g: sum(v) / len(v) for g, v in sp_scores.items()}
+    sp_sorted = sorted(sp_aff.items(), key=lambda kv: kv[1], reverse=True)
+    w_min, w_max = min(sp_aff.values()), max(sp_aff.values())
+
+    top10_rows = []
+    for rank_name, (genre_cn, aff_v) in enumerate(sp_sorted[:2], 1):
+        st.markdown(f"#### 第{rank_name}匹配流派：{genre_cn}（亲和度 {aff_v:+.2f}）")
+        recommend_section(genre_cn)
+        w = 0.5 if w_max - w_min < 1e-9 else (aff_v - w_min) / (w_max - w_min)
+        for _, r in genre_artists(genre_cn).iterrows():
+            top10_rows.append({"歌手": r["歌手"], "流派": genre_cn,
+                               "平均流行度": r["平均流行度"],
+                               "综合得分": round(w * r["平均流行度"] / 100, 4)})
+    top10 = (pd.DataFrame(top10_rows)
+             .drop_duplicates(subset="歌手")
+             .sort_values("综合得分", ascending=False)
+             .head(10).reset_index(drop=True))
+    top10.index = top10.index + 1
+    top10.index.name = "名次"
+    st.markdown("#### 综合推荐 Top10")
+    st.caption("综合得分 = 流派匹配度（归一化）× 歌手平均流行度（归一化），跨流派合并排序")
+    st.dataframe(top10, width="stretch", height=min(460, 35 * len(top10) + 38))
+
+    st.divider()
+    st.caption("**结论口径说明**：测评把你与 1010 名受访者做相似度匹配，"
+               "推荐来自与你最像的人群的真实打分，是**画像层面的群体倾向**，不是个体因果关系。")

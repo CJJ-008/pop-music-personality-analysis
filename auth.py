@@ -188,6 +188,12 @@ def login_gate() -> tuple[stauth.Authenticate, str | None, str | None]:
     if not st.session_state.get("authentication_status"):
         st.stop()
 
+    # 登录成功的那一次运行里 already 仍是 False，登录界面已经渲染在页面上了。
+    # 触发一次重跑，让下一次运行走 already=True 分支，只显示仪表盘，
+    # 避免登录表单与仪表盘短暂同屏。
+    if not already:
+        st.rerun()
+
     return authenticator, st.session_state.get("name"), st.session_state.get("username")
 
 
