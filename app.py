@@ -15,6 +15,7 @@
 本地运行：
     streamlit run app.py
 """
+import html
 import json
 from pathlib import Path
 from urllib.parse import quote
@@ -22,6 +23,7 @@ from urllib.parse import quote
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 from auth import login_gate, resolve_dirs
 from glossary import head_kb, kb, kb_row
@@ -34,6 +36,66 @@ st.set_page_config(page_title="性格 × 流行歌手推荐器", page_icon="🎧
 
 # ---- 登录门禁：未登录会渲染登录/注册页并中断脚本，通过后继续渲染仪表盘 ----
 authenticator, user_name, user_name_id = login_gate()
+
+# ---- 右上角账号图标：注入 Streamlit 顶栏，点开下拉可查看登录名并退出 ----
+# 退出原理：认证库的「记住登录」cookie 由前端 JS 写入（CookieManager, path=/），
+# 因此前端清除该 cookie 后整页刷新，新会话即回到登录页；
+# 顶栏是 Streamlit 的静态骨架，组件重渲染不影响注入的图标（脚本幂等，防重复注入）
+_display = html.escape(str(user_name or user_name_id))
+_cookie = str(getattr(authenticator, "cookie_name", "") or "music_personality_app")
+_account_js = r"""
+<script>
+(function () {
+  var doc = window.parent.document;
+  if (doc.getElementById('acct-chip')) return;   // 已注入过则跳过（重渲染幂等）
+  var NAME = "__NAME__", COOKIE = "__COOKIE__";
+  var host = doc.querySelector('[data-testid="stToolbar"]') ||
+             doc.querySelector('header[data-testid="stHeader"]');
+  if (!host) return;
+  var wrap = doc.createElement('div');
+  wrap.style.cssText = 'position:relative;display:flex;align-items:center;' +
+    'flex:0 0 auto;pointer-events:auto;';
+  wrap.innerHTML =
+    '<div id="acct-chip" title="账号">' +
+      '<span style="font-size:14px">👤</span>' +
+      '<span>' + NAME + '</span>' +
+      '<span style="font-size:10px;opacity:.7">▾</span></div>' +
+    '<div id="acct-menu">' +
+      '<div style="padding:9px 14px;font-size:12px;white-space:nowrap;' +
+        'border-bottom:1px solid rgba(128,128,128,.25)">已登录：<b>' + NAME + '</b></div>' +
+      '<div id="acct-logout" style="padding:9px 14px;font-size:13px;cursor:pointer;' +
+        'user-select:none">🚪 退出登录</div></div>';
+  var anchor = host.querySelector('[data-testid="stMainMenu"]');
+  if (anchor && anchor.parentElement) anchor.parentElement.insertBefore(wrap, anchor);
+  else host.appendChild(wrap);
+  var chip = doc.getElementById('acct-chip'), menu = doc.getElementById('acct-menu');
+  var bgc = (getComputedStyle(doc.body).backgroundColor || '').match(/\d+/g) || [255, 255, 255];
+  var dark = (0.299 * bgc[0] + 0.587 * bgc[1] + 0.114 * bgc[2]) < 128;
+  chip.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 12px;' +
+    'border-radius:16px;cursor:pointer;user-select:none;white-space:nowrap;' +
+    'font-size:13px;line-height:22px;pointer-events:auto;color:inherit;' +
+    'background:rgba(128,128,128,.16);border:1px solid rgba(128,128,128,.30)';
+  menu.style.cssText = 'display:none;position:absolute;top:34px;right:0;min-width:170px;' +
+    'border-radius:10px;overflow:hidden;z-index:1000001;' +
+    'box-shadow:0 8px 24px rgba(0,0,0,.25);border:1px solid rgba(128,128,128,.35);' +
+    'background:' + (dark ? '#1b2030;color:#fafafa' : '#ffffff;color:#262626');
+  var style = doc.createElement('style');
+  style.textContent = '#acct-chip:hover{background:rgba(128,128,128,.30)!important}' +
+                      '#acct-logout:hover{background:rgba(128,128,128,.18)}';
+  doc.head.appendChild(style);
+  chip.addEventListener('click', function (e) {
+    e.stopPropagation();
+    menu.style.display = (menu.style.display === 'block') ? 'none' : 'block';
+  });
+  doc.addEventListener('click', function () { menu.style.display = 'none'; });
+  doc.getElementById('acct-logout').addEventListener('click', function () {
+    doc.cookie = COOKIE + '=; Max-Age=0; path=/';   // 清「记住登录」cookie
+    window.parent.location.reload();                 // 刷新后回到登录页
+  });
+})();
+</script>
+""".replace("__NAME__", _display).replace("__COOKIE__", _cookie)
+components.html(_account_js, height=0)
 
 
 @st.cache_data
@@ -142,10 +204,6 @@ with st.sidebar:
                          type="primary" if p == profile else "secondary") and p != profile:
                 st.session_state.profile = p
                 st.rerun()
-
-    st.divider()
-    st.caption(f"当前登录：**{user_name or user_name_id}**")
-    authenticator.logout(location="sidebar", button_name="退出登录")
 
     st.divider()
     st.caption(
@@ -316,8 +374,7 @@ elif page == "🏷️ 按性格标签找歌手":
     # pills 行内容超宽时被静默截断（容器 overflow:auto 但无可见滚动条，鼠标无法拖动）。
     # 注入分两半：CSS 用 st.html（样式能生效，但脚本不会执行）；JS 必须用
     # components.html 的 srcdoc 同源 iframe——它可以从 iframe 内部操作父页面 DOM。
-    st.html("""
-<style>
+    st.html("""<style>
   div[data-testid="stButtonGroup"] > div { scrollbar-width: none; }
   div[data-testid="stButtonGroup"] > div::-webkit-scrollbar { display: none; }
   .tag-scroll-btn {
@@ -333,8 +390,6 @@ elif page == "🏷️ 按性格标签找歌手":
   .tag-scroll-btn.right { right: 2px; }
 </style>
 """)
-    import streamlit.components.v1 as components
-
     components.html("""
 <script>
 (function () {
