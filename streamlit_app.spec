@@ -11,9 +11,10 @@ GitHub 单文件 100MB 限制，不能也不应提交进仓库。
 from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
 datas = [
-    # 应用本体与认证模块：streamlit 运行时以脚本方式执行 app.py，故作为数据文件携带
+    # 应用本体与认证/问号弹窗模块：streamlit 运行时以脚本方式执行 app.py，故作为数据文件携带
     ("app.py", "."),
     ("auth.py", "."),
+    ("glossary.py", "."),
     # 仪表盘唯一的数据源：分析结果表
     ("outputs/tables", "outputs/tables"),
     # 流行度预测模型（预测器页用）

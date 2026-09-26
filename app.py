@@ -10,6 +10,7 @@
 因此克隆仓库或部署到 Streamlit Community Cloud 后无需重新跑分析、冷启动即可用。
 分析逻辑见 src/，完整分析报告见 reports/。
 登录认证见 auth.py（凭据存 st.secrets，注册用户持久化到 data/users.json）。
+专业知识点配 ❓ 问号弹窗（glossary.py），点开是给非专业用户的通俗解释。
 
 本地运行：
     streamlit run app.py
@@ -23,6 +24,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from auth import login_gate, resolve_dirs
+from glossary import head_kb, kb, kb_row
 
 # 结果表在打包后位于 _MEIPASS 只读资源目录，源码运行时就是项目根目录
 RESOURCE_DIR, ROOT = resolve_dirs()
@@ -139,6 +141,7 @@ with st.sidebar:
         "再结合画像的流派偏好与各流派 Top 歌手给出推荐。\n\n"
         f"画像间流派偏好差异经 Kruskal-Wallis 检验，17 个流派中 15 个显著（p<0.05）。"
     )
+    kb("significance", label="❓ 什么是 p<0.05？")
 
     # ---- 完整分析报告入口（在线 + 离线）----
     st.divider()
@@ -169,6 +172,7 @@ if page == "📊 数据总览":
     m2.metric("Spotify 歌曲", "28,356 首", "去重后 · 10,692 位歌手")
     m3.metric("性格画像", "3 类", "K-Means · 轮廓系数 0.170")
     m4.metric("推荐标签", "37 个", "性格 / 生活方式 / 兴趣 / 背景")
+    kb_row("kmeans", label="📖 名词小课堂：K-Means 聚类 · 轮廓系数是什么")
 
     st.subheader("推荐方式怎么选")
     st.markdown(
@@ -188,13 +192,14 @@ if page == "📊 数据总览":
 
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown("**分类：预测性格画像**（随机森林最优）")
+        head_kb("分类：预测性格画像（随机森林最优）", "random_forest", bold=True)
         st.dataframe(cl, width="stretch", height=min(240, 35 * len(cl) + 38))
     with c2:
-        st.markdown("**回归：预测歌曲流行度**（R² = 0.17）")
+        head_kb("回归：预测歌曲流行度（R² = 0.17）", "r2", bold=True)
         st.dataframe(rg, width="stretch", height=min(240, 35 * len(rg) + 38))
 
-    st.markdown('**推荐效果评测**（留一法，排除本人；详细解读见「性格小测评」页）')
+    head_kb("推荐效果评测（留一法，排除本人；详细解读见「性格小测评」页）",
+            "loocv", bold=True)
     st.dataframe(ev, width="stretch", height=min(280, 35 * len(ev) + 38))
     st.caption("混合推荐（性格信号 + 流行度先验，α=0.4）平均排名 2.89，"
                "优于任何单一方法；KNN 亦显著优于随机猜。"
@@ -218,9 +223,10 @@ elif page == "🎧 按画像推荐":
     m2.metric("女性占比", f"{row['女性占比']:.0%}")
     m3.metric("平均年龄", f"{row['平均年龄']:.1f} 岁")
     m4.metric("城市占比", f"{row['城市占比']:.0%}")
+    kb_row("kmeans", label="📖 名词小课堂：这个画像来自 K-Means 聚类")
 
     # ---- 性格雷达图 + 五维解读 ----
-    st.subheader("性格侧写（五维人格代理指标）")
+    head_kb("性格侧写（五维人格代理指标）", "bigfive", "zscore")
     z_row = zscore.loc[profile]
     cats = list(z_row.index)
 
@@ -251,7 +257,7 @@ elif page == "🎧 按画像推荐":
                 st.markdown(f"- {trait}：低于平均 {v:+.2f} 个标准差")
 
     # ---- 流派与歌手推荐 ----
-    st.subheader("音乐偏好与代表歌手")
+    head_kb("音乐偏好与代表歌手", "relative_pref")
     st.caption("流派按「相对全体均值的偏好差异」排序（而非绝对分），才能体现画像的特征流派")
 
     sub = concl[concl["性格画像"] == profile]
@@ -374,7 +380,7 @@ elif page == "🏷️ 按性格标签找歌手":
                f"{int(sizes.min())}~{int(sizes.max())} 人）的流派偏好，取平均后合成。")
 
     # ---- 17 流派亲和度条形图 ----
-    st.subheader("你的人群画像偏爱哪些流派")
+    head_kb("你的人群画像偏爱哪些流派", "relative_pref")
     sorted_genres = combo_sorted.index.tolist()
     fig = go.Figure(go.Bar(
         x=combo_sorted.values[::-1],
@@ -456,6 +462,7 @@ elif page == "📝 性格小测评":
     st.title("📝 性格小测评")
     st.caption("回答 25 道小题，系统会从 1010 名问卷受访者中找出与你性格最像的人群，"
                "用他们的真实音乐偏好为你推荐流派与歌手")
+    kb_row("bigfive", "knn", label="📖 名词小课堂：大五人格 · KNN 是什么")
 
     with st.form("quiz_form", clear_on_submit=False):
         saved = st.session_state.get("quiz_saved", {})
@@ -519,6 +526,7 @@ elif page == "📝 性格小测评":
             height=380, margin=dict(l=50, r=50, t=30, b=30), showlegend=False)
         st.plotly_chart(fig, width="stretch")
     with col_read:
+        kb("zscore")
         st.markdown("你的五维得分（1-5 分制）与 1010 人平均水平对比：")
         for t in QUIZ_TRAITS:
             dz = user_z[t]
@@ -612,9 +620,10 @@ elif page == "🔍 歌手查询":
     m3.metric("平均流行度", f"{row['平均流行度']:.1f}",
               f"{row['平均流行度'] - ref['平均流行度']:+.1f} vs 全体")
     m4.metric("发行年份中位数", f"{int(row['发行年份中位数'])}")
+    kb_row("popularity", label="📖 名词小课堂：流行度 0-100 是什么")
 
     # 音频特征与全体歌手平均对比
-    st.subheader("音频特征（与全体歌手平均对比）")
+    head_kb("音频特征（与全体歌手平均对比）", "audio_features")
     feature_cn = {"danceability": "舞蹈性", "energy": "能量", "valence": "情绪效价",
                   "acousticness": "原声度", "instrumentalness": "器乐占比",
                   "liveness": "现场感", "speechiness": "语音占比"}
@@ -635,7 +644,7 @@ elif page == "🔍 歌手查询":
     st.plotly_chart(fig, width="stretch")
 
     # 反向推荐：哪类画像最可能喜欢 TA
-    st.subheader("哪类性格画像最可能喜欢 TA")
+    head_kb("哪类性格画像最可能喜欢 TA", "relative_pref")
     if genre_cn in prof_rel.columns:
         pr = prof_rel[genre_cn].sort_values(ascending=False)
         st.markdown(f"该歌手的主流派别是 **{genre_cn}**。各画像对该流派的偏好差异：")
@@ -672,6 +681,8 @@ else:
             "模型只能解释流行度差异的一小部分（R²≈0.17），"
             "预测值应理解为**大致区间**而非精确值——这正是本项目回归分析的核心发现："
             "歌曲走红主要由宣发与传播驱动，而非音频特征本身。")
+    kb_row("random_forest", "r2", "audio_features",
+           label="📖 名词小课堂：随机森林 · R² · 音频特征")
 
     g1, g2 = st.columns(2)
     with g1:
@@ -712,7 +723,7 @@ else:
     st.progress(min(pred / 100, 1.0))
 
     imp = load_csv("predictor_feature_importance.csv", index_col=True)
-    st.subheader("模型眼中最重要的因素 Top10")
+    head_kb("模型眼中最重要的因素 Top10", "feature_importance")
     top = imp.head(10).iloc[::-1]
     fig = go.Figure(go.Bar(x=top["重要性"], y=top.index, orientation="h", marker_color="#55a868"))
     fig.update_layout(height=380, margin=dict(l=10, r=30, t=10, b=10),
