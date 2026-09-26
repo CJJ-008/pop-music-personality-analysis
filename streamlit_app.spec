@@ -41,6 +41,15 @@ a = Analysis(
         "auth",
         # Streamlit 脚本执行器在运行时动态 import 此模块，静态分析看不到，必须显式声明
         "streamlit.runtime.scriptrunner.magic_funcs",
+        # 流行度模型（joblib pickle）反序列化时需要的 sklearn 模块——
+        # 静态分析看不到 pickle 内部依赖，必须显式声明
+        "sklearn",
+        "sklearn.ensemble",
+        "sklearn.ensemble._forest",
+        "sklearn.tree",
+        "sklearn.tree._classes",
+        "sklearn.utils",
+        "scipy.sparse",
     ],
     hookspath=[],
     hooksconfig={},

@@ -47,6 +47,12 @@ def main() -> None:
 
     multiprocessing.freeze_support()  # Windows 打包程序的标准要求
 
+    # 确保这些模块被打包：joblib.load 反序列化流行度模型时需要它们，
+    # 但 PyInstaller 的静态分析看不到 pickle 文件内部的依赖链，必须显式导入
+    import sklearn.ensemble  # noqa: F401
+    import sklearn.tree  # noqa: F401
+    import scipy.sparse  # noqa: F401
+
     base = base_dir()
     os.chdir(base)  # 让 st.secrets 读到 exe 旁边的 .streamlit/secrets.toml
 
