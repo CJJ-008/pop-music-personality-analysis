@@ -117,10 +117,11 @@ def recommend_section(genre_cn: str) -> None:
 
 # ---------------------------------------------------------------- 侧边栏 ----
 with st.sidebar:
-    page = st.radio("推荐方式", ["按画像推荐", "按性格标签找歌手", "性格小测评"],
+    page = st.radio("页面", ["📊 数据总览", "🎧 按画像推荐", "🏷️ 按性格标签找歌手",
+                         "📝 性格小测评", "🔍 歌手查询", "🎚️ 流行度预测器"],
                     label_visibility="collapsed")
 
-    if page == "按画像推荐":
+    if page == "🎧 按画像推荐":
         st.header("选择性格画像")
         options = [f"{p}（{demo.loc[p, '人数']} 人）" for p in PROFILES]
         choice = st.radio("画像", options, label_visibility="collapsed")
@@ -158,8 +159,53 @@ with st.sidebar:
     else:
         st.caption("离线 HTML 版未打包：源码运行时执行 src/07_build_report.py 生成")
 
+# ============================================================ 页面0: 总览 ====
+if page == "📊 数据总览":
+    st.title("📊 数据总览")
+    st.caption("一个用真实问卷与歌曲数据回答「什么性格的年轻人喜欢什么歌手」的项目")
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("问卷受访者", "1,010 人", "15~30 岁 · 斯洛伐克")
+    m2.metric("Spotify 歌曲", "28,356 首", "去重后 · 10,692 位歌手")
+    m3.metric("性格画像", "3 类", "K-Means · 轮廓系数 0.170")
+    m4.metric("推荐标签", "37 个", "性格 / 生活方式 / 兴趣 / 背景")
+
+    st.subheader("推荐方式怎么选")
+    st.markdown(
+        "- **🎧 按画像推荐**：三类专业画像（尽责自律 / 开放好奇 / 情绪稳定外向），"
+        "展示性格雷达图、流派偏好与代表歌手；\n"
+        "- **🏷️ 按性格标签找歌手**：勾选 37 个性格/生活方式/兴趣标签，"
+        "系统圈出问卷中最符合的人群并实时合成推荐；\n"
+        "- **📝 性格小测评**：答 25 道题（约 3 分钟），从 1010 人中找出与你最像的 101 人，"
+        "生成专属推荐与性格雷达图；\n"
+        "- **🔍 歌手查询**：反向推荐——输入歌手名，看哪类性格的人最可能喜欢 TA；\n"
+        "- **🎚️ 流行度预测器**：拖动滑块调整歌曲的音频特征，实时预测流行度。")
+
+    st.subheader("模型成绩单")
+    cl = load_csv("classify_model_comparison.csv")
+    rg = load_csv("regress_model_comparison.csv")
+    ev = load_csv("recommender_eval.csv")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**分类：预测性格画像**（随机森林最优）")
+        st.dataframe(cl, width="stretch", height=min(240, 35 * len(cl) + 38))
+    with c2:
+        st.markdown("**回归：预测歌曲流行度**（R² = 0.17）")
+        st.dataframe(rg, width="stretch", height=min(240, 35 * len(rg) + 38))
+
+    st.markdown('**推荐效果评测**（留一法，排除本人；详细解读见「性格小测评」页）')
+    st.dataframe(ev, width="stretch", height=min(280, 35 * len(ev) + 38))
+    st.caption("混合推荐（性格信号 + 流行度先验，α=0.4）平均排名 2.89，"
+               "优于任何单一方法；KNN 亦显著优于随机猜。"
+               "流派偏好主要由大众流行度驱动，性格是次要但真实的信号。")
+
+    st.subheader("项目结构")
+    st.caption("分析脚本 src/01~12 · 报告 reports/ · 技术栈档案 技术栈说明.md · "
+               "本应用读取的全部结果表均在 outputs/tables/（已入库）")
+
 # ============================================================ 页面1: 画像 ====
-if page == "按画像推荐":
+elif page == "🎧 按画像推荐":
     row = demo.loc[profile]
 
     st.title("🎧 性格 × 流行歌手推荐器")
@@ -230,7 +276,7 @@ if page == "按画像推荐":
     )
 
 # ============================================================ 页面2: 标签 ====
-elif page == "按性格标签找歌手":
+elif page == "🏷️ 按性格标签找歌手":
     groups = json.loads((TAB / "tag_groups.json").read_text(encoding="utf-8"))
 
     st.title("🏷️ 按性格标签找歌手")
@@ -400,7 +446,7 @@ elif page == "按性格标签找歌手":
                "不是个体因果关系。")
 
 # ============================================================ 页面3: 测评 ====
-else:
+elif page == "📝 性格小测评":
     QUIZ_TRAITS = ["外向社交", "尽责自律", "情绪稳定", "开放好奇", "宜人友善"]
     SCALE = ["1 完全不同意", "2 比较不同意", "3 一般", "4 比较同意", "5 完全同意"]
     questions = json.loads((TAB / "quiz_questions.json").read_text(encoding="utf-8"))
@@ -529,3 +575,148 @@ else:
     st.divider()
     st.caption("**结论口径说明**：测评把你与 1010 名受访者做相似度匹配，"
                "推荐来自与你最像的人群的真实打分，是**画像层面的群体倾向**，不是个体因果关系。")
+
+# ============================================================ 页面4: 歌手查询 ====
+elif page == "🔍 歌手查询":
+    artists_all = load_csv("artist_index.csv")
+    ref = load_csv("artist_overall_reference.csv").iloc[0]
+    prof_rel = load_csv("profile_genre_relative.csv", index_col=True)
+
+    st.title("🔍 歌手查询")
+    st.caption("输入歌手名（支持模糊匹配），查看 TA 的数据画像，"
+               "以及哪类性格的人最可能喜欢 TA")
+
+    name = st.text_input("歌手名（支持部分匹配，如 Ed、Taylor、Jay）", "").strip()
+    if not name:
+        st.info("在上方输入歌手名开始查询，例如 Ed Sheeran、Billie Eilish、DaBaby")
+        st.stop()
+
+    matches = artists_all[artists_all["歌手"].str.contains(name, case=False, na=False)]
+    if matches.empty:
+        st.warning(f"没有找到包含「{name}」的歌手（索引覆盖歌曲数≥5 的 "
+                   f"{len(artists_all)} 位歌手）。试试更短的关键词。")
+        st.stop()
+
+    if len(matches) > 1:
+        st.caption(f"匹配到 {len(matches)} 位歌手，显示最热门的前 8 位：")
+        pick = st.selectbox("选择歌手", matches["歌手"].head(8).tolist())
+        row = matches[matches["歌手"] == pick].iloc[0]
+    else:
+        row = matches.iloc[0]
+
+    genre_cn = row["流派中文"]
+    st.header(f"🎤 {esc(row['歌手'])}")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("主流派别", genre_cn)
+    m2.metric("歌曲数", f"{int(row['歌曲数'])} 首")
+    m3.metric("平均流行度", f"{row['平均流行度']:.1f}",
+              f"{row['平均流行度'] - ref['平均流行度']:+.1f} vs 全体")
+    m4.metric("发行年份中位数", f"{int(row['发行年份中位数'])}")
+
+    # 音频特征与全体歌手平均对比
+    st.subheader("音频特征（与全体歌手平均对比）")
+    feature_cn = {"danceability": "舞蹈性", "energy": "能量", "valence": "情绪效价",
+                  "acousticness": "原声度", "instrumentalness": "器乐占比",
+                  "liveness": "现场感", "speechiness": "语音占比"}
+    diff_rows = []
+    for k, cn in feature_cn.items():
+        v, o = row[f"平均{k}"], ref[f"平均{k}"]
+        diff_rows.append({"特征": cn, "该歌手": round(v, 3), "全体平均": round(o, 3),
+                          "差异": round(v - o, 3)})
+    diff_df = pd.DataFrame(diff_rows)
+    fig = go.Figure(go.Bar(
+        x=diff_df["差异"], y=diff_df["特征"], orientation="h",
+        marker_color=["#c44e52" if d > 0 else "#4c72b0" for d in diff_df["差异"]],
+        text=[f"{d:+.3f}" for d in diff_df["差异"]], textposition="outside",
+        hovertemplate="%{y}<br>该歌手 %{customdata[0]} | 全体 %{customdata[1]}<extra></extra>",
+        customdata=diff_df[["该歌手", "全体平均"]].values))
+    fig.update_layout(height=340, margin=dict(l=10, r=40, t=10, b=10),
+                      xaxis_title="与全体歌手平均的差异（红=更高，蓝=更低）")
+    st.plotly_chart(fig, width="stretch")
+
+    # 反向推荐：哪类画像最可能喜欢 TA
+    st.subheader("哪类性格画像最可能喜欢 TA")
+    if genre_cn in prof_rel.columns:
+        pr = prof_rel[genre_cn].sort_values(ascending=False)
+        st.markdown(f"该歌手的主流派别是 **{genre_cn}**。各画像对该流派的偏好差异：")
+        for prof_name, v in pr.items():
+            icon = "🔴" if v > 0.1 else ("🔵" if v < -0.1 else "⚪")
+            st.markdown(f"- {icon} **{prof_name}**：{v:+.2f}"
+                        + ("（明显高于平均）" if v > 0.1 else
+                           "（明显低于平均）" if v < -0.1 else "（接近平均）"))
+        st.caption("基于三个画像的流派偏好差异推算：歌手流派 → 各画像对该流派的亲和度。"
+                   "是画像层面的推断，不是因果结论。")
+    else:
+        st.warning(f"流派「{genre_cn}」暂无画像偏好数据")
+
+# ============================================================ 页面5: 预测器 ====
+else:
+    import joblib
+    import numpy as np
+
+    model_path = RESOURCE_DIR / "outputs" / "models" / "popularity_model.joblib"
+
+    @st.cache_resource
+    def load_model(path):
+        return joblib.load(path)
+
+    st.title("🎚️ 流行度预测器")
+    st.caption("拖动滑块调整歌曲的音频特征，训练好的随机森林模型会实时预测这首歌的流行度（0-100）")
+
+    payload = load_model(str(model_path))
+    model = payload["model"]
+    feature_cols = payload["feature_cols"]
+    audio = payload["audio_features"]
+
+    st.info(f"模型：随机森林回归（120 棵树），测试集 R² = {payload['test_r2']}。"
+            "模型只能解释流行度差异的一小部分（R²≈0.17），"
+            "预测值应理解为**大致区间**而非精确值——这正是本项目回归分析的核心发现："
+            "歌曲走红主要由宣发与传播驱动，而非音频特征本身。")
+
+    g1, g2 = st.columns(2)
+    with g1:
+        danceability = st.slider("舞蹈性", 0.0, 1.0, 0.7, 0.01)
+        energy = st.slider("能量", 0.0, 1.0, 0.6, 0.01)
+        valence = st.slider("情绪效价（0=悲伤 1=欢快）", 0.0, 1.0, 0.5, 0.01)
+        acousticness = st.slider("原声度", 0.0, 1.0, 0.2, 0.01)
+        speechiness = st.slider("语音占比", 0.0, 1.0, 0.1, 0.01)
+    with g2:
+        instrumentalness = st.slider("器乐占比", 0.0, 1.0, 0.02, 0.01)
+        liveness = st.slider("现场感", 0.0, 1.0, 0.15, 0.01)
+        loudness = st.slider("响度 (dB)", -60.0, 0.0, -6.0, 0.5)
+        tempo = st.slider("节奏 (BPM)", 50.0, 250.0, 120.0, 1.0)
+        duration_min = st.slider("时长（分钟）", 0.5, 10.0, 3.5, 0.1)
+
+    genre_key = st.selectbox("流派", list(payload["genre_options"].keys()),
+                             format_func=lambda k: payload["genre_options"][k])
+    year = st.slider("发行年份", 1956, 2020, 2019, 1)
+
+    row = {
+        "danceability": danceability, "energy": energy, "valence": valence,
+        "acousticness": acousticness, "speechiness": speechiness,
+        "instrumentalness": instrumentalness, "liveness": liveness,
+        "loudness": loudness, "tempo": tempo,
+        "duration_ms": duration_min * 60 * 1000, "key": 0, "mode": 1,
+        "release_year": year,
+    }
+    for g in payload["genre_options"]:
+        row[g] = 1 if g == genre_key else 0
+    X = pd.DataFrame([row])[feature_cols]
+
+    pred = model.predict(X)[0]
+    m1, m2 = st.columns(2)
+    m1.metric("预测流行度", f"{pred:.0f} / 100")
+    m2.metric("对比全体歌曲中位数", f"{pred - 43:.0f} 分",
+              f"{'高于' if pred > 43 else '低于'}中位数 43")
+
+    st.progress(min(pred / 100, 1.0))
+
+    imp = load_csv("predictor_feature_importance.csv", index_col=True)
+    st.subheader("模型眼中最重要的因素 Top10")
+    top = imp.head(10).iloc[::-1]
+    fig = go.Figure(go.Bar(x=top["重要性"], y=top.index, orientation="h", marker_color="#55a868"))
+    fig.update_layout(height=380, margin=dict(l=10, r=30, t=10, b=10),
+                      xaxis_title="特征重要性（不纯度下降）")
+    st.plotly_chart(fig, width="stretch")
+    st.caption("注意：发行年份是最强预测因子——流行度指标存在「新歌优势」。"
+               "这与回归分析的结论一致：歌曲走红主要由宣发与传播驱动。")

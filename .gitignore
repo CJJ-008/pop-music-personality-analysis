@@ -22,7 +22,7 @@ data/users.json
 .zcode/
 
 # ---- 大型二进制输出 ----
-outputs/models/
+# outputs/models/ 中的流行度模型（11MB）需入库：云端部署与 exe 都要加载它
 
 # ---- PyInstaller 打包产物 ----
 # exe 体积超过 GitHub 单文件 100MB 限制，且属可再生成物，不入库

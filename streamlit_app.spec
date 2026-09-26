@@ -16,6 +16,8 @@ datas = [
     ("auth.py", "."),
     # 仪表盘唯一的数据源：分析结果表
     ("outputs/tables", "outputs/tables"),
+    # 流行度预测模型（预测器页用）
+    ("outputs/models/popularity_model.joblib", "outputs/models"),
     # 分析报告的离线 HTML 版（侧边栏"下载离线报告"用）
     ("reports/分析报告.html", "reports"),
     # 凭据配置模板（真实的 secrets.toml 绝不打包——exe 可被解包，嵌凭据等于泄露）
