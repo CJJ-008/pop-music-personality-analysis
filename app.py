@@ -118,16 +118,30 @@ def recommend_section(genre_cn: str) -> None:
 
 
 # ---------------------------------------------------------------- 侧边栏 ----
+PAGES = ["📊 数据总览", "🎧 按画像推荐", "🏷️ 按性格标签找歌手",
+         "📝 性格小测评", "🔍 歌手查询", "🎚️ 流行度预测器"]
 with st.sidebar:
-    page = st.radio("页面", ["📊 数据总览", "🎧 按画像推荐", "🏷️ 按性格标签找歌手",
-                         "📝 性格小测评", "🔍 歌手查询", "🎚️ 流行度预测器"],
-                    label_visibility="collapsed")
+    # 按钮式导航：当前页高亮，点击即切换（替代 radio 的圆形勾选样式）
+    if "page" not in st.session_state:
+        st.session_state.page = PAGES[0]
+    page = st.session_state.page
+    for p in PAGES:
+        if st.button(p, key=f"nav_{p}", use_container_width=True,
+                     type="primary" if p == page else "secondary") and p != page:
+            st.session_state.page = p
+            st.rerun()
 
     if page == "🎧 按画像推荐":
         st.header("选择性格画像")
-        options = [f"{p}（{demo.loc[p, '人数']} 人）" for p in PROFILES]
-        choice = st.radio("画像", options, label_visibility="collapsed")
-        profile = PROFILES[options.index(choice)]
+        if "profile" not in st.session_state:
+            st.session_state.profile = PROFILES[0]
+        profile = st.session_state.profile
+        for p in PROFILES:
+            if st.button(f"{p}（{demo.loc[p, '人数']} 人）", key=f"prof_{p}",
+                         use_container_width=True,
+                         type="primary" if p == profile else "secondary") and p != profile:
+                st.session_state.profile = p
+                st.rerun()
 
     st.divider()
     st.caption(f"当前登录：**{user_name or user_name_id}**")
