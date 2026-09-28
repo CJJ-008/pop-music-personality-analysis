@@ -544,6 +544,8 @@ elif page == "📝 性格小测评":
                 if q["维度"] != dim:
                     continue
                 qn += 1
+                # saved 存的是 0 基下标（index 参数要求 0~4，存 1~5 会抛
+                # StreamlitValueOutOfRangeError，用户一改答案就整页报错）
                 st.radio(f"{qn}. {q['题干']}", SCALE,
                          index=saved.get(qn), horizontal=True, key=f"quiz_{qn}")
         submitted = st.form_submit_button("提交，看我的音乐人格", use_container_width=True)
@@ -562,14 +564,23 @@ elif page == "📝 性格小测评":
             v = 6 - v
         user_raw[q["维度"]].append(v)
     user_trait = {t: sum(v) / len(v) for t, v in user_raw.items()}
-    st.session_state["quiz_saved"] = {i: int(a[0]) for i, a in enumerate(answers, 1)}
+    # 存 0 基下标供 index= 回填；计分用上面的 user_raw（取自原始选项值）
+    st.session_state["quiz_saved"] = {i: int(a[0]) - 1 for i, a in enumerate(answers, 1)}
 
     user_z = pd.Series({t: (user_trait[t] - stats.loc[t, "均值"]) / stats.loc[t, "标准差"]
                         for t in QUIZ_TRAITS})
 
     # ---- KNN：五维 z 空间里找最相似的 10% 人群 ----
+    # 注意：basis 的列名带 z_ 前缀（z_外向社交…），而 user_z 的索引是维度名（外向社交…）。
+    # 必须先去掉前缀再相减——pandas 按索引对齐，标签对不上会静默产生全 NaN，
+    # 而 .sum() 默认跳过 NaN，最终所有人的距离都变成 0，导致无论怎么答题都推荐同一批人。
     zcols = [c for c in basis.columns if c.startswith("z_")]
-    dist = ((basis[zcols] - user_z) ** 2).sum(axis=1) ** 0.5
+    zbasis = basis[zcols].copy()
+    zbasis.columns = [c[len("z_"):] for c in zcols]
+    dist = ((zbasis - user_z) ** 2).sum(axis=1) ** 0.5
+    if dist.isna().any() or dist.max() == 0:
+        st.error("相似度计算异常（维度未对齐），请把此问题反馈给开发者。")
+        st.stop()
     k = max(50, int(round(len(basis) * 0.10)))
     cohort_idx = dist.nsmallest(k).index
     genre_cols = [c for c in basis.columns if not c.startswith("z_")]
