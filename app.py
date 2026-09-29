@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 """Streamlit 歌手推荐器：什么性格的年轻人喜欢什么样的流行歌手？
 
-两个推荐页面：
-1. 按画像推荐 —— 3 个 K-Means 性格画像，查看各画像的流派与代表歌手；
-2. 按性格标签找歌手 —— 用户自由勾选 26 个性格/生活方式/兴趣标签，
-   系统按「标签 → 参考人群 → 流派亲和度 → 歌手」链路实时合成推荐。
+六个页面（侧边栏按钮式导航）：
+1. 数据总览 —— 项目规模、推荐方式导引、模型成绩单；
+2. 按画像推荐 —— 3 个 K-Means 性格画像，查看各画像的流派与代表歌手；
+3. 按性格标签找歌手 —— 用户自由勾选 37 个性格/生活方式/兴趣标签，
+   系统按「标签 → 参考人群 → 流派亲和度 → 歌手」链路实时合成推荐；
+4. 性格小测评 —— 25 道题算出五维得分，用 KNN 找最像的 101 人做推荐；
+5. 歌手查询 —— 输入歌手名（支持部分匹配），看 TA 的照片、代表作与数据画像，
+   以及哪类性格画像最可能喜欢 TA（反向推荐）；
+6. 流行度预测器 —— 拖动音频特征滑块，随机森林实时预测流行度。
 
 数据源：只读取 outputs/tables/ 下已入库的分析结果表（不依赖原始数据），
 因此克隆仓库或部署到 Streamlit Community Cloud 后无需重新跑分析、冷启动即可用。
@@ -26,6 +31,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from auth import login_gate, resolve_dirs
+from artist_photo import get_artist_photo
 from glossary import head_kb, kb, kb_row
 
 # 结果表在打包后位于 _MEIPASS 只读资源目录，源码运行时就是项目根目录
@@ -669,9 +675,10 @@ elif page == "🔍 歌手查询":
     artists_all = load_csv("artist_index.csv")
     ref = load_csv("artist_overall_reference.csv").iloc[0]
     prof_rel = load_csv("profile_genre_relative.csv", index_col=True)
+    top_tracks = load_csv("artist_top_tracks.csv")
 
     st.title("🔍 歌手查询")
-    st.caption("输入歌手名（支持模糊匹配），查看 TA 的数据画像，"
+    st.caption("输入歌手名（支持模糊匹配），查看 TA 的照片、代表作与数据画像，"
                "以及哪类性格的人最可能喜欢 TA")
 
     name = st.text_input("歌手名（支持部分匹配，如 Ed、Taylor、Jay）", "").strip()
@@ -679,7 +686,10 @@ elif page == "🔍 歌手查询":
         st.info("在上方输入歌手名开始查询，例如 Ed Sheeran、Billie Eilish、DaBaby")
         st.stop()
 
-    matches = artists_all[artists_all["歌手"].str.contains(name, case=False, na=False)]
+    # regex=False：歌手里有 A$AP Rocky、Ty Dolla $ign 这类带正则符号的名字，
+    # 按字面匹配才搜得到（用户输入的就是歌手名的一部分，不是正则）
+    matches = artists_all[artists_all["歌手"].str.contains(name, case=False, na=False,
+                                                           regex=False)]
     if matches.empty:
         st.warning(f"没有找到包含「{name}」的歌手（索引覆盖歌曲数≥5 的 "
                    f"{len(artists_all)} 位歌手）。试试更短的关键词。")
@@ -693,14 +703,52 @@ elif page == "🔍 歌手查询":
         row = matches.iloc[0]
 
     genre_cn = row["流派中文"]
-    st.header(f"🎤 {esc(row['歌手'])}")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("主流派别", genre_cn)
-    m2.metric("歌曲数", f"{int(row['歌曲数'])} 首")
-    m3.metric("平均流行度", f"{row['平均流行度']:.1f}",
-              f"{row['平均流行度'] - ref['平均流行度']:+.1f} vs 全体")
-    m4.metric("发行年份中位数", f"{int(row['发行年份中位数'])}")
-    kb_row("popularity", label="📖 名词小课堂：流行度 0-100 是什么")
+    c_photo, c_body = st.columns([1, 3.4])
+    with c_photo:
+        # 照片从公开图源实时获取（Spotify 官方优先、网易云兜底），取不到就显示占位框，
+        # 不影响页面其它内容——详见 artist_photo.py
+        photo = get_artist_photo(row["歌手"])
+        if photo:
+            st.image(photo["url"], width="stretch")
+            src = (f"[{photo['provider']}]({photo['source_url']})"
+                   if photo["source_url"] else photo["provider"])
+            st.caption(f"照片来源：{src}")
+        else:
+            st.markdown(
+                "<div style='aspect-ratio:1;display:flex;align-items:center;"
+                "justify-content:center;font-size:38px;border-radius:10px;"
+                "border:1px dashed rgba(128,128,128,.45)'>🎤</div>",
+                unsafe_allow_html=True)
+            st.caption("未找到公开照片（照片需联网获取）")
+    with c_body:
+        st.header(f"🎤 {esc(row['歌手'])}")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("主流派别", genre_cn)
+        m2.metric("歌曲数", f"{int(row['歌曲数'])} 首")
+        m3.metric("平均流行度", f"{row['平均流行度']:.1f}",
+                  f"{row['平均流行度'] - ref['平均流行度']:+.1f} vs 全体")
+        m4.metric("发行年份中位数", f"{int(row['发行年份中位数'])}")
+        kb_row("popularity", label="📖 名词小课堂：流行度 0-100 是什么")
+
+    # 代表作：该歌手在数据集内最热门的歌曲
+    head_kb("代表作（数据集内最热门的歌曲）", "top_tracks")
+    tr = top_tracks[top_tracks["歌手"] == row["歌手"]].sort_values("排名")
+    if tr.empty:
+        st.info("该歌手在本项目数据集中没有单曲记录")
+    else:
+        st.dataframe(
+            tr[["排名", "歌曲名", "流行度", "专辑", "发行年份"]],
+            hide_index=True, width="stretch", height=min(240, 35 * len(tr) + 38),
+            column_config={
+                "排名": st.column_config.NumberColumn("排名", width="small"),
+                "流行度": st.column_config.ProgressColumn(
+                    "流行度", min_value=0, max_value=100, format="%d"),
+                "发行年份": st.column_config.NumberColumn("发行年份", format="%d"),
+            })
+        st.caption(f"口径：从本项目 28,356 首 Spotify 歌曲中，取该歌手播放热度"
+                   f"（流行度）最高的 {len(tr)} 首——不是完整作品年表，"
+                   "数据集没收录的歌不会出现在这里；"
+                   "流行度为 0 表示 Spotify 未给出该曲热度。")
 
     # 音频特征与全体歌手平均对比
     head_kb("音频特征（与全体歌手平均对比）", "audio_features")
