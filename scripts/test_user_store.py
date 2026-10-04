@@ -514,6 +514,72 @@ def test_mysql_ping_matches_backend() -> None:
 
 # ------------------------------------------------------------ 管理页门禁 --
 
+def test_admin_forms_keep_values() -> None:
+    """表单修复回归（用户报告的痛点）：校验失败不清空、成功才清空。
+
+    根因是 st.form(clear_on_submit=True) 会在**任何**提交后清空——
+    密码不合规的那次提交也清，用户名邮箱全陪葬。修复后：
+    失败 → 字段原样保留（只改出错的那格）；成功 → 手动 pop 各字段的 key 再重跑。
+    """
+    from streamlit.testing.v1 import AppTest
+
+    try:
+        store = us.MySqlUserStore.from_secrets()
+        ok, message = store.ping()
+    except us.StoreConfigError as exc:
+        print(f"[跳过] MySQL 未配置（{exc}）")
+        return
+    if not ok:
+        print(f"[跳过] MySQL 连不上：{message}")
+        return
+
+    store.delete_user("jisoo_test")
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=120)
+    at.session_state["authentication_status"] = True
+    at.session_state["name"] = "Tester"
+    at.session_state["username"] = auth.preset_usernames()[0]
+    at.session_state["roles"] = ["admin"]
+    at.session_state["page"] = ADMIN_PAGE
+    at.run()
+
+    def fill_and_submit(password: str) -> None:
+        [t for t in at.text_input if t.key == "admin_new_username"][0].set_value("jisoo_test")
+        [t for t in at.text_input if t.key == "admin_new_email"][0].set_value("j@x.com")
+        [t for t in at.text_input if t.key == "admin_new_password"][0].set_value(password)
+        [b for b in at.button if b.label == "创建用户"][0].click()
+        at.run()
+
+    def username_value() -> str:
+        return [t for t in at.text_input if t.key == "admin_new_username"][0].value
+
+    # 弱密码：必须被拦，且用户名/邮箱必须还在（本次修复的核心断言）
+    fill_and_submit("weak")
+    assert not at.exception, f"弱密码提交触发异常：{at.exception}"
+    errs = [e.value for e in at.error]
+    assert any("密码要求" in e for e in errs), f"弱密码没被拦下：{errs}"
+    assert username_value() == "jisoo_test", \
+        f"校验失败后用户名字段被清空了——这正是要修的 bug：{username_value()!r}"
+    email_kept = [t for t in at.text_input if t.key == "admin_new_email"][0].value
+    assert email_kept == "j@x.com", "校验失败后邮箱字段被清空了"
+    assert store.get_user("jisoo_test") is None, "失败提交不该真的建号"
+
+    # 合法密码：创建成功 + 表单清空 + 库里查得到
+    fill_and_submit("Str0ng!Pass")
+    assert not at.exception, f"合法提交触发异常：{at.exception}"
+    assert username_value() == "", "成功创建后表单应清空，避免连建重复账号"
+    ok_msgs = [s.value for s in at.success]
+    assert any("已创建用户" in m for m in ok_msgs), f"没有成功提示：{ok_msgs}"
+    record = store.get_user("jisoo_test")
+    assert record is not None, "创建成功但库里查不到"
+    assert record["roles"] == ["user"], f"默认角色不对：{record['roles']}"
+    import bcrypt
+
+    assert bcrypt.checkpw(b"Str0ng!Pass", record["password_hash"].encode()), "密码哈希校验失败"
+
+    store.delete_user("jisoo_test")
+    print("[通过] 表单交互（校验失败字段保留 / 成功创建后清空 / 库中数据正确）")
+
+
 def test_admin_page_gate() -> None:
     from streamlit.testing.v1 import AppTest
 
@@ -569,6 +635,7 @@ def main() -> int:
     test_mysql_roundtrip()
     test_readonly_query()
     test_mysql_credentials_integration()
+    test_admin_forms_keep_values()
     test_mysql_ping_matches_backend()
     test_admin_page_gate()
     print("\n全部通过：用户管理系统（双后端存储 / 凭据合并 / 数据库前端 / 管理页门禁）")

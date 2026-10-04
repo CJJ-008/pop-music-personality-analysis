@@ -522,17 +522,35 @@ def _render_grid_tab(store, records, credentials, preset, me) -> None:
                    "要改密码/邮箱请直接改 secrets.toml。")
 
 
+# 新增用户表单各字段的 session key。成功创建后逐个 pop 掉再重跑，
+# 控件即按 default 重新初始化（等价于清空）；失败时不 pop，字段原样保留。
+_CREATE_FORM_KEYS = ("admin_new_username", "admin_new_email", "admin_new_last",
+                     "admin_new_first", "admin_new_password", "admin_new_roles")
+# 重置密码表单同理
+_RESET_FORM_KEYS = ("admin_reset_pwd1", "admin_reset_pwd2")
+
+
 def _render_create_tab(store) -> None:
-    """➕ 新增用户：保留表单而不是在网格里加行——密码必须先 bcrypt 哈希。"""
-    with st.form("admin_create_user", clear_on_submit=True):
+    """➕ 新增用户：保留表单而不是在网格里加行——密码必须先 bcrypt 哈希。
+
+    clear_on_submit 必须是 False：它会在**任何**提交后清空表单，包括校验失败那次
+    ——密码少一个特殊字符，用户名、邮箱、姓名全部陪葬，只能从头重敲。
+    改成「失败保留、成功才清」：提交失败时字段原样留着，用户只改出错的那格；
+    创建成功后把各字段的 session key pop 掉再重跑，控件按 default 重新初始化，
+    效果等价于清空。这条同样适用于下面的重置密码表单。
+    """
+    with st.form("admin_create_user", clear_on_submit=False):
         c1, c2 = st.columns(2)
-        new_username = c1.text_input("用户名", help="1~20 位字母、数字、下划线或连字符，不支持中文")
-        new_email = c2.text_input("邮箱（可留空）")
+        new_username = c1.text_input("用户名", key="admin_new_username",
+                                     help="1~20 位字母、数字、下划线或连字符，不支持中文")
+        new_email = c2.text_input("邮箱（可留空）", key="admin_new_email")
         c3, c4 = st.columns(2)
-        new_last = c3.text_input("姓（可留空）")
-        new_first = c4.text_input("名（可留空）")
-        new_password = st.text_input("密码", type="password", help=PASSWORD_HINT_CN)
+        new_last = c3.text_input("姓（可留空）", key="admin_new_last")
+        new_first = c4.text_input("名（可留空）", key="admin_new_first")
+        new_password = st.text_input("密码", type="password", key="admin_new_password",
+                                     help=PASSWORD_HINT_CN)
         new_roles = st.multiselect("角色", [ADMIN_ROLE, "user"], default=["user"],
+                                   key="admin_new_roles",
                                    help="admin 可进「👤 用户管理」；user 只能用其余页面")
         if st.form_submit_button("创建用户", type="primary"):
             problem = username_problem(new_username) or password_problem(new_password)
@@ -550,6 +568,8 @@ def _render_create_tab(store) -> None:
                         "roles": new_roles,
                         "status": STATUS_ACTIVE,
                     })
+                    for key in _CREATE_FORM_KEYS:
+                        st.session_state.pop(key, None)
                     _flash_and_rerun(f"已创建用户「{new_username}」，可在「📋 数据表」里继续维护")
                 except Exception as exc:  # noqa: BLE001 - 重名、库不可用等
                     st.error(f"创建失败：{exc}")
@@ -569,9 +589,10 @@ def _render_reset_pwd_tab(store, records, preset) -> None:
         st.caption("存储里还没有可管理的账号（预置账号的密码在 secrets.toml 里）。")
         return
     target = st.selectbox("选择用户", manageable, key="admin_reset_target")
-    with st.form("admin_reset_pwd", clear_on_submit=True):
-        pwd = st.text_input("新密码", type="password", help=PASSWORD_HINT_CN)
-        pwd2 = st.text_input("再输一次", type="password")
+    with st.form("admin_reset_pwd", clear_on_submit=False):
+        pwd = st.text_input("新密码", type="password", key="admin_reset_pwd1",
+                            help=PASSWORD_HINT_CN)
+        pwd2 = st.text_input("再输一次", type="password", key="admin_reset_pwd2")
         if st.form_submit_button("重置密码", type="primary"):
             problem = password_problem(pwd)
             if problem:
@@ -581,10 +602,13 @@ def _render_reset_pwd_tab(store, records, preset) -> None:
             else:
                 try:
                     store.set_password(target, hash_password(pwd))
+                    for key in _RESET_FORM_KEYS:
+                        st.session_state.pop(key, None)
                     _flash_and_rerun(f"已重置「{target}」的密码")
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"重置失败：{exc}")
-    st.caption("密码只存 bcrypt 哈希，页面上无法查看原密码——忘记就只能重置。")
+    st.caption("密码只存 bcrypt 哈希，页面上无法查看原密码——忘记就只能重置。"
+               "校验不通过时已输入的内容会保留，改到合格再提交即可。")
 
 
 def _render_log_tab(store) -> None:
