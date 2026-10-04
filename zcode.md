@@ -71,6 +71,8 @@
 | D31 | 搜索框实时联想 | ①引入第三方组件 streamlit-searchbox ②原生 live 输入 + 候选芯片 ③原生 selectbox 全量下拉 ④前端自研 JS 注入 | **② 原生 live + 候选芯片**（用户要求"输入几个字自动联想，省得输入全部名字"）：先用 `st.text_input(type="search", live="400ms")` 实现逐键提交（原生组件默认只在回车/失焦提交，做不了联想），再用 `st.pills` 把候选做成点一下即查的芯片；性能上用 `@st.fragment` 把搜索区隔离，逐键只重跑该片段、不连带重绘照片/代表作/图表；fragment 内选歌手需 `st.rerun(scope="app")` 让主体跟着更新，并加「值真的变了才重绘」护栏防死循环；候选 ≤1 时自动选中省一次点击；不引入任何第三方依赖（exe 无需额外前端资源） | 2026-09-30 | 已完成 |
 | D32 | 按描述找歌/找歌手 | ①中文词典+音频特征检索 ②词典为主+可选 LLM 兜底 ③只用 LLM ④接音频指纹服务做旋律 | **① 中文词典 + 音频特征检索**（用户在四选一后拍板；同时拍板"旋律如实说明不做"、"新增歌级特征表"）：数据边界先行实测——数据集无 melody/pitch/chroma/歌词/音频文件/歌手性别，字面意义的旋律匹配不可行，页面与文档如实写明；实现分三层：style_search.py（144 词条词典 + parse_query 长词优先解析 + 逐约束打分）、src/13_style_search.py（导出歌级特征表 28356×17≈3MB / 标准化基准 / 词典 CSV / 示例 JSON + 方向自检 6/6）、app.py 第 7 页（fragment 隔离 + 示例按钮 on_click 回调写值 + 解释区 + Top10 歌曲/Top5 歌手带照片 + 跳转歌手查询页）；打分口径 85% 风格 + 15% 流行度（沿用混合推荐），并列按流行度/歌名兜底可复现；不支持的词（旋律/歌词/男女声/具体乐器/语种）当面说"做不到"并给替代建议 | 2026-09-30 | 已完成 |
 | D33 | 用户管理系统与用户数据存储 | ①直接把 data/users.json 换成 MySQL ②把存储抽象成可切换的双后端 ③另起一个独立的管理系统应用 | **② 双后端可切换**（用户拍板"按推荐方案来"，管理页范围选"基础 + 登录日志"）：项目有三个运行场景且对存储的要求互相矛盾——本地答辩想用 MySQL、Streamlit Cloud **连不到本机 127.0.0.1:3306**、exe 的目标机通常没装 MySQL，所以新增 user_store.py 把「读写用户」抽成统一接口（JsonUserStore / MySqlUserStore），由 secrets 的 `[storage] backend` 决定用哪个，**缺省 json** 保证云端与 exe 的行为零变化；auth.py 只换数据来源，登录/加密/Cookie 逻辑一行未动（`login_gate()` 返回签名也不变）；「启用/禁用」靠在 load_credentials() 里过滤掉禁用账号实现——不去改认证库内部逻辑，禁用账号在它眼里等于不存在；管理页嵌在 app.py 作第 8 页、仅 roles 含 admin 可见，**导航过滤 + 渲染分支双重判断**（只藏按钮不算权限控制，page 存在 session_state 里用户能自己改）；权限认 roles 不认「用户名等于 admin」，自助注册一律给 user 角色；登录日志记成功/失败与会话开始（失败时的用户名只能对「账号确实存在、只是密码错」尽力还原——认证库失败时不写 session_state['username']，只有 failed_login_attempts 计数器留下痕迹，其余如实记为「未知用户」，不猜）；MySQL 配置不全或连不上时自动回退文件存储并在页面提示，宁可降级可用也不让登录页起不来；凭据只存 secrets.toml（已 gitignore），建表脚本 scripts/init_db.py 幂等可重复执行；新增 scripts/test_user_store.py（含 MySQL 连不上则跳过、不假装通过的惯例）；实测建库（pop_music 的 users / login_log 两表）与真实登录链路全部通过，过程中被测试与复查抓出三个"不报错的错"（roles 列 JSON 解析错、MySQL rowcount 语义误报、被禁用管理员仍持有权限），详见进度跟踪条目 | 2026-10-01 | 已完成 |
+| D34 | 登录页 UI 重设计与全局主题 | 风格三选一：①音乐渐变卡片（深色氛围+居中窄卡片）②极简素雅卡片 ③左右分栏品牌页；范围二选一：①登录页+全局主题统一 ②只改登录页 | **①+①**（用户三问均选推荐项；另拍板"先验证 UI、exe 稍后随下次存档一起打包"）：现状是没有 config.toml 的默认主题 + 全宽表单，观感"太大太宽"；改为新建 .streamlit/config.toml 锁定深色主题（base=dark、主色沿用 #ff4b4b，登录页与 8 个主页面共用，exe/云端/答辩现场不再随观看者浏览器设置变化）；auth.py 只动渲染不动逻辑——新增 _LOGIN_CSS，沿用 D22/D30 验证过的「CSS 走 st.html（样式生效、脚本不执行）」注入模式，且只在未登录分支注入、登录后 rerun 自然消失；主容器收窄约 420px 居中、st.title 换成 56px 圆形🎧渐变徽章+小号标题+灰色副标题、登录/注册 tabs 包进圆角卡片（细边框+柔和投影）、输入框圆角聚焦红描边、提交按钮拉通卡片宽、页面底层加克制径向光晕（红/紫约 10% 透明度）、顶栏透明；登录逻辑（fields 汉化/验证码/错误与降级提示/st.stop/st.rerun/禁用踢出/_render_setup_help）一行不动；备忘：日后重新打包 exe 时需确认 streamlit_app.spec 的 datas 带上 config.toml，否则 exe 里没有主题 | 2026-10-04 | 已完成 |
+| D35 | 应用内主题切换（科技风渐变） | 实现机制：①运行时 CSS 覆盖层 ②热改 config.toml+重启 ③多份 config 切换；主题阵容三选 N；记忆：①仅会话内 ②Cookie 跨会话 | **机制① + 三套深色主题 + Cookie 跨会话**（用户拍板：阵容=🔴霓虹夜曲(现状)/🔵科技蓝/🟣赛博紫，默认=霓虹夜曲，跨会话记住）：config.toml 是启动时定死的，运行中改不了，唯一可行做法是运行时 CSS 覆盖层（沿用 D22/D30/D34 验证过的注入模式）；全部深色系的原因：浅色主题需连文字颜色一起翻、覆盖面太大易碎；新增 theme.py（三套预设：主色/悬停色/页面底/侧边栏底/双色光晕 + inject_global_css() 覆盖页面背景、侧边栏、主按钮、tabs 下划线、pills 选中、滑块手柄、进度条、输入聚焦描边、链接色；cookie 读取走 st.context.cookies（服务端直读请求头），写入沿用 D26 的前端 JS document.cookie 模式，只在值变化时注入）；app.py 登录门禁后注入全局覆盖 CSS + 侧边栏底部 st.pills 切换器；auth.py 登录页配色从写死改为读当前主题预设（默认主题下与 D34 现状完全一致）；已知取舍：config.toml 的 primaryColor 仍是 #ff4b4b，个别未被覆盖到的内部焦点色在非红色主题下可能仍是红，以浏览器实测为准修正 | 2026-10-04 | 已完成 |
 
 ## 五、数据集档案
 
@@ -120,12 +122,14 @@ E:\流行音乐数据分析\
 ├── glossary.py           # 名词小帮手：概念的通俗解释文案（入 git）
 ├── artist_photo.py       # 歌手照片图源（Spotify 官方优先 + 网易云降级，入 git）
 ├── style_search.py       # 描述找歌：中文词典解析 + 音频特征检索（入 git）
+├── theme.py              # 主题切换：三套深色主题预设 + CSS 覆盖层 + Cookie 记忆（入 git）
 ├── launcher.py           # exe 启动器：起本地服务、开浏览器、端口探测（入 git）
 ├── streamlit_app.spec    # PyInstaller 单文件打包配置（入 git）
 ├── requirements.txt      # 锁定版本的依赖清单（入 git，云端部署必需）
 ├── .python-version       # 指定 Python 3.12（入 git，云端部署用）
 ├── .gitignore            # 数据、凭据、缓存不入库（入 git）
 ├── .streamlit/
+│   ├── config.toml       # 全局主题基调（深色，登录页与主应用共用，入 git）
 │   └── secrets.toml.example  # 凭据模板（真实 secrets.toml 不入 git）
 ├── data/
 │   ├── README.md         # 数据下载指引（入 git）
@@ -159,7 +163,7 @@ E:\流行音乐数据分析\
 ├── notebooks/            # Jupyter 探索草稿
 ├── reports/              # 最终分析报告 Notebook（入 git）
 └── outputs/
-    ├── figures/          # 18 张图表 PNG（入 git，简历展示用）
+    ├── figures/          # 19 张图表 PNG（入 git，简历展示用）
     └── tables/           # 37 个结果表文件（34 CSV + 3 JSON，入 git，仪表盘数据源）
 ```
 
@@ -306,6 +310,54 @@ E:\流行音乐数据分析\
         （两者都是延迟导入，静态分析看不到）；exe 未重新构建，留待发布时复验；
       → 文档同步：README（目录树/登录与注册/持久化边界对照表/云端与 exe 说明）、
         本文件（R13/D33/结构树/交付清单）、技术栈说明.md 第 51 条
+- [x] 登录页 UI 重设计 + 全局主题（D34）：音乐渐变卡片 + config.toml 锁定深色主题
+      → 三问三答均选推荐项：风格=音乐渐变卡片；范围=登录页+全局主题一起；exe 稍后随下次存档一起打包；
+      → 新建 .streamlit/config.toml（此前不存在）：base=dark、主色沿用 #ff4b4b，登录页与 8 个主页面
+        共用一套配色，exe/云端/答辩现场不再随观看者浏览器主题设置变化；
+      → auth.py 只动渲染不动逻辑：新增 _LOGIN_CSS/_LOGIN_HEADER，沿用「CSS 走 st.html（样式生效、
+        脚本不执行）」的既有结论（D22/D30），仅在未登录分支注入、登录成功 rerun 后自然消失；
+      → 浏览器实测抓出四个 Streamlit 1.64 的样式坑（都值得记）：
+        ① emotion 自带选择器比属性选择器优先级高，width/背景覆盖必须加 !important；
+        ② stTabs 与纵向块默认收缩包裹（fit-content），卡片要显式拉满——连主容器左右各 80px 的
+           默认内边距都得压掉（430px 减完只剩 270px 内容区，内联 !important 都改不动时的线索）；
+        ③ 该版本不暴露任何主题 CSS 变量（--primary-color 等全部不存在），带 var() 的声明整体作废，
+           CSS 改用与 config.toml 一致的字面值（改主题需两处同步，已在代码注释标明）；
+        ④ 文本框已改 react-aria 结构，旧 [data-baseweb="input"] 选择器匹配不到，须按新结构定位；
+      → 逐状态验证：登录卡片（居中约 430px / 🎧 徽章 / 红紫光晕 / 红色拉通按钮）→ 注册 tab
+        （验证码完整、双列字段、注册按钮拉通）→ 错误密码（红条提示）→ 空提交（蓝条提示）→
+        登录进主应用三页抽查（数据总览 / 歌手查询 / 按画像推荐：侧边栏、账号图标、wide 布局、
+        雷达图全部无恙，登录页 CSS 未泄漏进主应用）；
+      → 回归：test_user_store / test_artist_search / test_style_search / test_quiz_varies 全部通过；
+      → exe 未重新打包（用户拍板稍后随下次存档一起；届时 streamlit_app.spec 的 datas 需带上 config.toml）
+- [x] 应用内主题切换（D35）：三套深色主题即时切换 + Cookie 跨会话记住
+      → 用户拍板：阵容=🔴霓虹夜曲(默认)/🔵科技蓝/🟣赛博紫，Cookie 跨会话记住；
+        config.toml 启动时定死、运行中改不了，运行时唯一可行做法是 CSS 覆盖层（沿用既有注入模式）；
+      → 新增 theme.py：三套预设（主色/悬停/柔光/页面底/侧边栏底/双色光晕/滑块色相角）
+        + inject_global_css()（页面背景、侧边栏渐变、主按钮、tabs 下划线、pills 选中、
+        滑块手柄/填充线/数值标签、进度条、输入聚焦描边、链接色）
+        + Cookie 读（st.context.cookies，服务端直读请求头）与写（D26 同款前端 JS，仅值变化时注入）；
+      → app.py：登录门禁后播种 Cookie 选择 + 注入全局覆盖层；侧边栏底部 st.pills 切换器；
+      → auth.py：登录页配色改为跟随主题（默认主题下与 D34 状态完全一致，登录页随 Cookie 还原上次选择）；
+      → 又踩出四个值得记的坑：
+        ① CSS 模板不能用 str.format()——满屏字面大括号被当成占位符
+           （KeyError: '\n max-width'），改用 D26 的 __TOKEN__ 替换模式；
+        ② st.pills 没有 stPills testid，渲染成 stButtonGroup 里的按钮：
+           单选（主题切换器）是 role="radio"+aria-checked，多选（标签栏）是 button+aria-pressed；
+        ③ 滑块填充线是轨道上的内联 linear-gradient（随值逐个变化，不能整体覆盖，
+           且永远按 config.toml 的红色生成），用 hue-rotate(主题主色色相) 把红转到主题色——
+           灰色轨道段无色相、不受影响，旋转角按主题写在预设里；
+        ④ AppTest 元素定位：页面有多个 pills 后 at.pills[0] 不再是候选列表，
+           test_artist_search 的 suggestions() 改为按 key="artist_suggest" 遍历匹配
+           （应用逻辑无回归，是测试定位歧义——Ed Sheeran 唯一匹配的误报即由此来）；
+      → 已知残留：测评页单选圆圈、个别内部焦点色仍是 config.toml 的红色
+        （1.64 react-aria 内部样式未覆盖到，深色观感下不显眼），如实记录不硬凑；
+      → 浏览器逐项验证：默认霓虹夜曲（与改前一致）→ 科技蓝（背景光晕/侧边栏/导航主按钮/
+        主题 pills 选中/标签多选选中/滑块手柄+填充线+数值标签）→ 赛博紫（同上）→
+        服务器重启后凭 Cookie 还原主题 → 退出登录后登录页跟随上次主题；
+      → 回归：test_user_store / test_artist_search（修定位后 7 项）/ test_style_search /
+        test_quiz_varies 全部通过；
+      → exe 未重新打包（届时 streamlit_app.spec 的 datas 需带上 config.toml；
+        theme.py 随源码进 PYZ，无需额外打包配置）
 - [ ] Streamlit Community Cloud 部署（D14：已推迟——GitHub 授权/邮箱验证已完成，等功能完善后直接 Create app；Secrets 内容见 zcode 决策 D21 记录）
 
 ## 九之六、小测评「结果不随作答变化」故障复盘（2026-09-28，D27）
@@ -405,14 +457,14 @@ UI 状态回填类参数（如 index）要存"参数要求的口径"，不是"�
 
 | 交付物 | 位置 | 说明 |
 |--------|------|------|
-| 需求与决策档案 | `zcode.md` | 33 项决策记录、完整结果、踩坑记录 |
+| 需求与决策档案 | `zcode.md` | 35 项决策记录、完整结果、踩坑记录 |
 | 简历用项目说明 | `README.md` | 含核心结论表、技术亮点、局限说明 |
 | 分析报告 | `reports/流行音乐数据分析报告.ipynb` | 26 单元格，已执行验证 0 报错 |
-| 交互式仪表盘 | `app.py` + `auth.py` + `user_store.py` | 八页（数据总览/画像/37标签/25题测评/歌手查询/描述找歌/流行度预测器/用户管理）+ 登录注册认证 + 角色权限 + 用户存储双后端 |
+| 交互式仪表盘 | `app.py` + `auth.py` + `user_store.py` + `theme.py` | 八页（数据总览/画像/37标签/25题测评/歌手查询/描述找歌/流行度预测器/用户管理）+ 登录注册认证 + 角色权限 + 用户存储双后端 + 三套主题即时切换（Cookie 记忆）+ 音乐渐变卡片登录页 |
 | 分析脚本 | `src/01`~`13` | 数据获取 → 清洗 → 聚类 → 分类 → 回归 → 映射 → 报告生成 → 标签亲和度 → 测评基准 → 推荐评测 → 歌手索引与代表作 → 流行度模型 → 描述找歌词典与歌级特征表 |
-| 图表 | `outputs/figures/` | 18 张，全部中文渲染，已通过视觉检查 |
+| 图表 | `outputs/figures/` | 19 张，全部中文渲染，已通过视觉检查 |
 | 结果表 | `outputs/tables/` | 37 个结果表文件（34 CSV + 3 JSON），Excel 可直接打开，也是仪表盘数据源 |
-| 部署配置 | `requirements.txt` + `.python-version` + `.streamlit/secrets.toml.example` | 锁定版本与凭据模板 |
+| 部署配置 | `requirements.txt` + `.python-version` + `.streamlit/secrets.toml.example` + `.streamlit/config.toml` | 锁定版本、凭据模板与全局主题 |
 | 用户库建表脚本 | `scripts/init_db.py` | 建库建表（幂等），本地 MySQL 用户管理用 |
 | 远程备份 | GitHub `CJJ-008/pop-music-personality-analysis` | 公开仓库，异地备份已完成 |
 

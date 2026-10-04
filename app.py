@@ -50,6 +50,7 @@ from auth import (
 from artist_photo import get_artist_photo
 from glossary import head_kb, kb, kb_row
 import style_search
+import theme
 from user_store import STATUS_ACTIVE, STATUS_DISABLED, fmt_local, get_store, norm_roles
 
 # 结果表在打包后位于 _MEIPASS 只读资源目录，源码运行时就是项目根目录
@@ -60,6 +61,11 @@ st.set_page_config(page_title="性格 × 流行歌手推荐器", page_icon="🎧
 
 # ---- 登录门禁：未登录会渲染登录/注册页并中断脚本，通过后继续渲染仪表盘 ----
 authenticator, user_name, user_name_id = login_gate()
+
+# ---- 主题（D35）：播种 Cookie 里记住的选择，再按当前主题注入全局覆盖 CSS ----
+# 必须在 login_gate 之后：未登录时登录页的配色由 auth.py 自己按主题渲染
+theme.init_session()
+theme.inject_global_css()
 
 # ---- 右上角账号图标：注入 Streamlit 顶栏，点开下拉可查看登录名并退出 ----
 # 退出原理：认证库的「记住登录」cookie 由前端 JS 写入（CookieManager, path=/），
@@ -653,6 +659,13 @@ with st.sidebar:
             help="自包含单文件，双击即可在浏览器打开，无需安装 Python")
     else:
         st.caption("离线 HTML 版未打包：源码运行时执行 src/07_build_report.py 生成")
+
+    # ---- 主题风格切换（D35）：pills 即改即生效，选择写 Cookie 跨会话记住 ----
+    st.divider()
+    st.markdown("**🎨 主题风格**")
+    st.pills("主题风格", options=theme.labels(), key=theme.STATE_KEY,
+             label_visibility="collapsed")
+    theme.persist_cookie_js()
 
 # ============================================================ 页面0: 总览 ====
 if page == "📊 数据总览":

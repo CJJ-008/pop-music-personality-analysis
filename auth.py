@@ -37,6 +37,7 @@ from user_store import (
     resolve_dirs,
     to_auth_entry,
 )
+import theme
 
 # 管理员角色名。管理页的可见性与渲染都以此为准，不认「用户名等于 admin」这种约定——
 # 用户名是可以随便起的，角色才是能配置的授权。
@@ -144,6 +145,133 @@ def load_credentials() -> tuple[dict, dict]:
     return {"usernames": registered}, cfg
 
 
+# ===== 登录页视觉（D34）：居中窄卡片 + 深色氛围光晕 =====
+# 只在未登录分支注入，登录成功 rerun 后自然消失，主应用不受影响。
+# CSS 走 st.html（样式能生效、脚本不执行——app.py 的 D22/D30 已验证过这一结论）；
+# 表单控件由 streamlit-authenticator 库内部渲染，本项目只能整体包裹 + CSS 定位，
+# 不能逐个替换控件，所以这里全是针对 Streamlit DOM 的样式覆盖。
+# 登录页配色跟随当前主题（D35）：字段来自 theme.py 的预设，
+# 默认主题「霓虹夜曲」下与 D34 当时的效果完全一致。
+_LOGIN_CSS_TMPL = """<style>
+/* 页面收窄居中：告别全宽表单。
+   注意要把左右大内边距一并压掉：容器 430px 减去默认左右各 80px 内边距后
+   内容区只剩 270px，卡片会跟着缩（浏览器实测踩过这个坑） */
+[data-testid="stMainBlockContainer"] {
+    max-width: 430px;
+    margin: 0 auto;
+    padding-top: max(6vh, 40px) !important;
+    padding-left: 18px !important;
+    padding-right: 18px !important;
+}
+
+/* 深色氛围光晕：颜色随主题（theme.py）；顶栏透明让渐变透出来 */
+[data-testid="stAppViewContainer"] {
+    background:
+        radial-gradient(1100px 520px at 12% -10%, __GLOW_A__, transparent 60%),
+        radial-gradient(950px 520px at 90% 110%, __GLOW_B__, transparent 60%),
+        __PAGE__ !important;
+}
+[data-testid="stHeader"] { background: transparent !important; }
+
+/* 头部：圆形徽章 + 小号标题 + 灰色副标题 */
+.login-hero { text-align: center; margin: 2px 0 14px; }
+.login-hero .hero-badge {
+    width: 56px; height: 56px; margin: 0 auto 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px; line-height: 1; border-radius: 50%;
+    background: linear-gradient(135deg, __GLOW_A__, __GLOW_B__);
+    border: 1px solid __ACCENT_SOFT__;
+    box-shadow: 0 6px 22px __ACCENT_SOFT__;
+}
+.login-hero h1 {
+    margin: 0 0 6px; font-size: 1.3rem; font-weight: 700;
+    letter-spacing: .5px; color: #f5f5f5;
+}
+.login-hero p { margin: 0; font-size: .86rem; color: rgba(245, 245, 245, .6); }
+
+/* 主内容纵向块拉满容器：实测 1.64 的纵向块默认收缩包裹（fit-content），
+   不拉满的话卡片、输入框会全部缩成内容宽 */
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] { width: 100% !important; }
+
+/* 登录/注册 tabs 整体卡片化：深色面板 + 细边框 + 柔和投影 */
+[data-testid="stTabs"] {
+    width: 100% !important;
+    background: __SIDEBAR__ !important;
+    border: 1px solid rgba(255, 255, 255, .08);
+    border-radius: 16px;
+    padding: 14px 18px 16px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, .42);
+}
+[data-testid="stTabs"] [data-baseweb="tab-list"] { justify-content: center; gap: 40px; }
+/* 卡片内不再套一层表单边框，保持单张卡片的干净观感 */
+[data-testid="stForm"] { border: none; padding: 2px 0 0; }
+
+/* 输入框盒子：1.64 的文本框是 react-aria 结构（旧的 [data-baseweb="input"] 已不存在），
+   盒子底色与卡片同为 #161b26 且边框同色会"隐形"，改成深一档底色 + 可见描边，聚焦描红 */
+[data-testid="stTextInput"] .react-aria-TextField > div {
+    background: __PAGE__ !important;
+    border: 1px solid rgba(255, 255, 255, .14) !important;
+    border-radius: 10px;
+}
+[data-testid="stTextInput"] .react-aria-TextField:focus-within > div {
+    border-color: __ACCENT__ !important;
+}
+
+/* 提交按钮拉通卡片宽度：1.64 的元素容器默认内容宽，要把整条祖先链都拉满。
+   Streamlit 自带样式选择器优先级更高，宽度/背景覆盖必须 !important（浏览器实测验证过） */
+[data-testid="stForm"] [data-testid="stElementContainer"]:has([data-testid="stFormSubmitButton"]) { width: 100% !important; }
+[data-testid="stForm"] [data-testid="stElementContainer"]:has([data-testid="stFormSubmitButton"]) > div { width: 100% !important; }
+[data-testid="stFormSubmitButton"] { width: 100% !important; }
+[data-testid="stFormSubmitButton"] button { width: 100% !important; border-radius: 10px; }
+/* 库的提交按钮是 secondary 灰样式，染成主色让登录/注册按钮成为卡片视觉焦点 */
+[data-testid="stBaseButton-secondaryFormSubmit"] {
+    background: __ACCENT__ !important;
+    border-color: __ACCENT__ !important;
+    color: rgb(255, 255, 255) !important;
+}
+[data-testid="stBaseButton-secondaryFormSubmit"]:hover {
+    background: __ACCENT_HOVER__ !important;
+    border-color: __ACCENT_HOVER__ !important;
+    color: rgb(255, 255, 255) !important;
+}
+[data-testid="stBaseButton-secondaryFormSubmit"]:focus-visible {
+    outline-color: rgb(255, 255, 255) !important;
+}
+/* tab 已标明「登录/注册」，隐藏表单内部重复的小标题 */
+[data-testid="stTabs"] [data-testid="stForm"] h3 { display: none; }
+
+/* 卡片下方的提示条贴紧一点 */
+[data-testid="stAlert"] { margin-top: 14px; }
+</style>"""
+
+
+def _login_css() -> str:
+    """按当前主题渲染登录页 CSS（D35）。
+
+    用 __TOKEN__ 替换而不是 str.format()：模板里全是 CSS 字面大括号，
+    format 会把它们误当占位符（首次实现就栽在这个 KeyError 上）。
+    """
+    p = theme.current_preset()
+    return (
+        _LOGIN_CSS_TMPL
+        .replace("__ACCENT_HOVER__", p["accent_hover"])
+        .replace("__ACCENT_SOFT__", p["accent_soft"])
+        .replace("__ACCENT__", p["accent"])
+        .replace("__PAGE__", p["page"])
+        .replace("__SIDEBAR__", p["sidebar"])
+        .replace("__GLOW_A__", p["glow_a"])
+        .replace("__GLOW_B__", p["glow_b"])
+    )
+
+_LOGIN_HEADER = """
+<div class="login-hero">
+  <div class="hero-badge">🎧</div>
+  <h1>性格 × 流行歌手推荐器</h1>
+  <p>请登录后使用 · 首次使用请切换到「注册」创建账号</p>
+</div>
+"""
+
+
 def login_gate() -> tuple[stauth.Authenticate, str | None, str | None]:
     """登录门禁：未登录则渲染登录/注册页并中断脚本，已登录则返回认证对象与用户信息。
 
@@ -174,8 +302,8 @@ def login_gate() -> tuple[stauth.Authenticate, str | None, str | None]:
     already = st.session_state.get("authentication_status") is True
 
     if not already:
-        st.title("🎧 性格 × 流行歌手推荐器")
-        st.caption("请登录后使用。首次使用请切换到「注册」标签创建账号。")
+        st.html(_login_css())
+        st.markdown(_LOGIN_HEADER, unsafe_allow_html=True)
 
         tab_login, tab_register = st.tabs(["登录", "注册"])
 

@@ -46,8 +46,16 @@ def type_query(at: AppTest, text: str) -> None:
 
 
 def suggestions(at: AppTest) -> list[str]:
-    """当前联想出的候选歌手（st.pills 在测试框架里是 ButtonGroup 元素）。"""
-    return list(at.pills[0].options) if len(at.pills) else []
+    """当前联想出的候选歌手（st.pills 在测试框架里是 ButtonGroup 元素）。
+
+    必须按 key 精确取：D35 在侧边栏加了主题切换 pills 后，页面上有多个
+    pills，取「第一个」会把主题切换器误当成候选列表（Ed Sheeran 唯一匹配
+    的回归点就是这么误报的）。
+    """
+    for p in at.pills:
+        if p.key == "artist_suggest":
+            return list(p.options)
+    return []
 
 
 def tables(at: AppTest):
