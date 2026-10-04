@@ -11,7 +11,15 @@ sys.path.insert(0, str(ROOT))
 
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
+import auth  # noqa: E402
+
 SCALE = ["1 完全不同意", "2 比较不同意", "3 一般", "4 比较同意", "5 完全同意"]
+
+# 登录门禁会核对「会话里的账号是否仍然有效」（被禁用/删除的账号要立刻挡下），
+# 所以播种的必须是真实存在的账号——secrets 里的预置账号。
+# 用虚构用户名会被当成已删除的账号拦在门外，应用什么都不会渲染。
+_TEST_USER = (auth.preset_usernames() or [None])[0]
+assert _TEST_USER, "本测试需要 .streamlit/secrets.toml 里至少配置一个预置账号（应用本身也依赖它）"
 
 
 def run_quiz(picks: list[int], resubmit: bool = True) -> str:
@@ -24,7 +32,7 @@ def run_quiz(picks: list[int], resubmit: bool = True) -> str:
     # 跳过登录门禁
     at.session_state["authentication_status"] = True
     at.session_state["name"] = "tester"
-    at.session_state["username"] = "tester"
+    at.session_state["username"] = _TEST_USER
     at.session_state["page"] = "📝 性格小测评"
     at.run()
 

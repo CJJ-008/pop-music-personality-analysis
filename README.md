@@ -116,6 +116,12 @@ Spotify 数据 ─► 去重/特征工程 ─► 流行度回归（线性回归 
    才显露出画像差异，并如实标注「尽责自律型各流派偏好均衡、无突出偏好」。
 5. **消融实验**：通过「仅音频 vs 音频+流派」的对比量化流派特征带来的 R² 增益。
 6. **结论可复现**：全部脚本固定随机种子（`RANDOM_STATE=42`），一条命令重跑全流程。
+7. **为不改坏已有能力而多写一层**：用户管理需要 MySQL，但云端部署连不到本机数据库、
+   exe 的目标机通常没装 MySQL——直接把存储换成数据库会同时打破这两种分发方式。
+   于是把「读写用户」抽象成统一接口、两个实现（文件 / MySQL），用一行配置切换，
+   缺省仍是文件，**登录认证逻辑与已有两种分发方式的行为都零变化**。
+   权限判断认角色而非用户名，管理页在导航与渲染两处各判一次
+   （只藏按钮不构成权限控制）。
 
 ## 六、项目局限（如实说明）
 
@@ -131,8 +137,9 @@ Spotify 数据 ─► 去重/特征工程 ─► 流行度回归（线性回归 
 ```
 ├── zcode.md              # 项目需求与决策记录
 ├── README.md             # 本文件
-├── app.py                # Streamlit 交互式仪表盘（带登录/注册）
-├── auth.py               # 登录认证模块（凭据读取、注册用户持久化）
+├── app.py                # Streamlit 交互式仪表盘（登录/注册 + 八个页面）
+├── auth.py               # 登录认证：门禁、角色判断、登录日志
+├── user_store.py         # 用户存储层：文件（JSON）/ MySQL 双后端，按配置切换
 ├── launcher.py           # exe 启动器（起本地服务、自动开浏览器、端口探测）
 ├── streamlit_app.spec    # PyInstaller 打包配置
 ├── requirements.txt      # 依赖清单（含锁定版本，部署云端必需）
@@ -143,7 +150,9 @@ Spotify 数据 ─► 去重/特征工程 ─► 流行度回归（线性回归 
 ├── data/
 │   ├── README.md         # 数据获取说明
 │   ├── raw/              # 原始数据（不入 git）
-│   └── processed/        # 清洗后数据（不入 git，可重新生成）
+│   ├── processed/        # 清洗后数据（不入 git，可重新生成）
+│   ├── users.json        # 注册用户（文件后端写入，不入 git）
+│   └── login_log.json    # 登录日志（文件后端写入，不入 git）
 ├── src/
 │   ├── config.py         # 共享配置（路径、中文字体、存图存表）
 │   ├── 01_download_data.py       # 数据获取（Spotify 直链 + kagglehub）
@@ -153,12 +162,24 @@ Spotify 数据 ─► 去重/特征工程 ─► 流行度回归（线性回归 
 │   ├── 05_regression_popularity.py # 流行度回归 + 消融对比
 │   ├── 06_singer_mapping.py      # 画像×歌手映射（核心结论）
 │   ├── 07_build_report.py        # 程序化生成分析报告 Notebook
-│   └── 08_tag_recommender.py     # 性格标签×流派亲和度矩阵（标签推荐页数据源）
+│   ├── 08_tag_recommender.py     # 性格标签×流派亲和度矩阵（标签推荐页数据源）
+│   ├── 09_quiz_recommender.py    # 小测评题库/人群基准/KNN 基础表
+│   ├── 10_recommender_eval.py    # 推荐效果评测（留一法）
+│   ├── 11_artist_index.py        # 歌手索引与代表作表（歌手查询页数据源）
+│   ├── 12_train_popularity_model.py # 训练并保存流行度模型
+│   └── 13_style_search.py        # 描述找歌：歌级特征表/标准化基准/词典
 ├── reports/              # 分析报告 Notebook
-├── scripts/setup_github.sh  # GitHub 远程仓库配置脚本
+├── scripts/
+│   ├── setup_github.sh       # GitHub 远程仓库配置脚本
+│   ├── init_db.py            # 建库建表（MySQL 用户管理，幂等可重复执行）
+│   ├── test_user_store.py    # 测试：存储层双后端 + 凭据合并 + 管理页门禁
+│   ├── test_artist_search.py # 测试：歌手查询（联想/代表作）
+│   ├── test_style_search.py  # 测试：描述找歌（词典方向/打分/页面渲染）
+│   ├── test_quiz_varies.py   # 测试：小测评结果随作答变化
+│   └── test_artist_photo.py  # 测试：歌手照片图源
 └── outputs/
     ├── figures/          # 18 张图表
-    └── tables/           # 31 张结果表（CSV，Excel 可直接打开；也是仪表盘的数据源）
+    └── tables/           # 37 个结果表文件（34 CSV + 3 JSON；仪表盘的数据源）
 ```
 
 ## 八、两种可视化界面
@@ -199,21 +220,36 @@ jupyter notebook
   预计算（每标签取问卷最符合的前 30% 人群，流派亲和度 = 人群均分 − 全体均分），
   标签栏带左右滚动按钮（窄屏/标签多时可见全部标签）。
   测评页的题库、人群基准与 KNN 基础表由 `src/09_quiz_recommender.py` 预计算。
-- **🔍 歌手查询**：输入歌手名（支持模糊匹配），查看 TA 的**照片**、**代表作**（数据集内
-  最热门的 5 首，含流行度/专辑/发行年份）、流派、流行度、音频特征与全体歌手的
-  对比，以及哪类性格画像最可能喜欢 TA——推荐方向反过来。
+- **🔍 歌手查询**：输入几个字母就**实时联想**出候选歌手（不必输入完整名字，点一下即查），
+  查看 TA 的**照片**、**代表作**（数据集内最热门的 5 首，含流行度/专辑/发行年份）、
+  流派、流行度、音频特征与全体歌手的对比，以及哪类性格画像最可能喜欢 TA——推荐方向反过来。
   歌手索引与代表作表由 `src/11_artist_index.py` 预计算；照片由 `artist_photo.py`
   实时从公开图源获取（Spotify 官方 API 优先——在 secrets 里配置 client_id/secret
   即启用，未配置或失败时自动回落到网易云免密钥接口；都取不到就显示占位框，
-  只认名字完全对得上的结果，宁缺勿错）。
+  只认名字完全对得上的结果，宁缺勿错）；联想搜索用 Streamlit 的 `live` 输入 +
+  `@st.fragment` 隔离，逐键刷新只重跑搜索框那一小块，不连带重绘整页。
+- **💬 描述找歌**：用自己的话描述想要的风格（如"钢琴伴奏的深夜抒情歌""适合跑步的
+  快节奏电子"），中文词典把描述解析成音频特征与流派/年代的约束，对 28,356 首歌
+  实时打分排序，给出 Top10 歌曲、Top5 歌手（带照片）与逐条"为什么匹配"；
+  支持 144 个词条（情绪/节奏/乐器感/场景/流派/年代/调式），没听懂的说法会明确提示。
+  数据边界如实标注：数据集没有旋律/音高、歌词、乐器识别与歌手性别字段，
+  所以"哼一段旋律""按歌词找""找女声"都不支持——乐器类描述也是用原声度近似；
+  解析与打分逻辑在 `style_search.py`，歌级特征表与词典由 `src/13_style_search.py` 预计算入库。
 - **🎚️ 流行度预测器**：拖动滑块调整舞蹈性/能量/响度等特征，训练好的随机森林
   实时预测流行度（模型由 `src/12_train_popularity_model.py` 训练并保存）。
   附有 R²=0.17 的诚实标注——预测的是大致区间而非精确值。
+- **👤 用户管理**（**仅管理员可见**）：用户列表（含来源、状态、角色、创建时间、
+  最后登录）、新增用户、重置密码、启用/禁用、改角色、改资料、删除账号，
+  以及登录日志（谁在何时登录、成功与否）。
+  权限靠**角色**而不是用户名：只有 `roles` 含 `admin` 的账号才看得到这个页面，
+  自助注册的账号一律是 `user` 角色，管理员只能由管理员授予。
+  账号数据可以存在两个地方——本地 **MySQL 数据库**，或默认的 `data/users.json`
+  文件（详见下面的「登录与注册」）。
 - **📊 数据总览**：项目规模、三种推荐方式的导引、模型成绩单
   （分类/回归/推荐评测），以及混合推荐的结论，
   推荐依据在页面底部可展开核查。
 - **❓ 名词小帮手**：每个用到专业概念的位置（随机森林、R²、K-Means、
-  流派亲和度、留一法、代表作……共 **12 个概念、21 处**）都配了一个问号小按钮，
+  流派亲和度、留一法、代表作、基于内容的检索……共 **14 个概念、23 处**）都配了一个问号小按钮，
   点开是写给非专业用户的生活化解释——"随机森林 = 一群评委投票"这种级别
   的大白话，不懂大数据也能放心用（见 `glossary.py`，文案与《技术栈说明》同口径）。
 
@@ -232,17 +268,55 @@ streamlit run app.py              # 浏览器访问 http://localhost:8501
   可复制模板开始：`.streamlit/secrets.toml.example`
 - **注册功能**：任何人可在「注册」标签自助创建账号，带图形验证码；
   密码用 **bcrypt 哈希**存储，任何环节都不保存明文
-- **注册用户持久化**：写入 `data/users.json`（已 gitignore）。
-  这一点必须自己实现——`streamlit-authenticator` 的注册只更新内存字典、不落盘，
-  而 Streamlit 每次交互都会重建认证对象，不落盘的话注册完一刷新就没了
+- **角色**：`roles` 含 `admin` 才能进「👤 用户管理」页，自助注册的账号一律是 `user`。
+  **预置账号必须显式写上 `roles = ["admin"]`**，否则登录进去也看不到管理页
+  （模板里已写好这一行）
+- **用户数据存哪**：由 `user_store.py` 统一负责，两种后端同一套接口，
+  用 `secrets` 里的一个开关切换——`[storage] backend = "json"`（**缺省**，
+  读写 `data/users.json`）或 `"mysql"`（读写本地 MySQL 数据库）：
 
-> ⚠️ **线上持久化限制**：Streamlit Community Cloud 的文件系统是临时的，
-> 应用重启或重新部署后 `data/users.json` 会被重置，**注册账号会丢失**
-> （secrets 里的预置账号不受影响）。要真正长期保存用户需接外部数据库
-> （如 Supabase/PostgreSQL），属后续扩展。
+  ```toml
+  [storage]
+  backend = "mysql"          # 改成 "json" 即退回文件存储
+
+  [mysql]
+  host = "127.0.0.1"
+  port = 3306
+  user = "root"
+  password = "你的 MySQL 密码"   # 只存这里，本文件已 gitignore
+  database = "pop_music"
+  ```
+
+  首次启用先建库建表（幂等，可重复执行）：
+
+  ```bash
+  python scripts/init_db.py            # 建库 + 建表
+  python scripts/init_db.py --check    # 只检查连接与表是否就绪
+  python scripts/test_user_store.py    # 测试：双后端 + 凭据合并 + 管理页门禁
+  ```
+
+  连不上或密码没填时**应用不会崩**：自动回退到文件存储并在页面上显示黄色提示，
+  登录照常可用。注册用户必须自己落盘这一点仍然成立——`streamlit-authenticator`
+  的注册只更新内存字典、不落盘，而 Streamlit 每次交互都会重建认证对象，
+  不落盘的话注册完一刷新就没了。
+
+> ⚠️ **持久化能力的真实边界（两种场景不一样，不要混为一谈）**
+>
+> | 运行方式 | 用户数据存哪 | 重启后还在吗 |
+> |----------|--------------|--------------|
+> | 本地（`backend = "mysql"`） | 本机 MySQL 数据库 | **在**，持久化 |
+> | 本地（默认 `backend = "json"`） | `data/users.json` | 在（本地文件系统是持久的） |
+> | Streamlit Community Cloud | `data/users.json` | **不在**——云端文件系统是临时的，重启或重新部署即重置，注册账号会丢（secrets 预置账号不受影响） |
+> | 打包 exe 分发 | exe 旁的 `data/users.json` | 在（除非用户自己删掉） |
+>
+> 云端之所以仍走文件：云端服务器**连不到你本机的 `127.0.0.1:3306`**，
+> 想让云端也用数据库，得换成有公网地址的托管数据库（Aiven、腾讯云等），属后续扩展。
+> 所以准确的说法是「本地已实现数据库持久化，云端尚未」——**不能笼统说成"接上了数据库"**。
 >
 > ⚠️ **安全提示**：「必须登录」+「开放注册」的实际效果是"任何人注册一下就能进"，
-> 防护意义有限，主要价值是演示完整的认证流程。
+> 防护意义有限，主要价值是演示完整的认证流程与权限管理。
+> 另外，**预置账号（secrets 里的）永远可登录**，这是刻意留的兜底——
+> MySQL 挂了、密码填错了，你依然能用它进去修。
 
 ### 云端部署（Streamlit Community Cloud，免费）
 
@@ -261,7 +335,10 @@ streamlit run app.py              # 浏览器访问 http://localhost:8501
    first_name = "Admin"
    last_name = "User"
    password = "你的强密码"
+   roles = ["admin"]      # 少了这行进不去「用户管理」页
    ```
+   **不要**在这里配 `[mysql]`：云端服务器连不到你本机的数据库，
+   配了只会每次启动都回退到文件存储并弹提示。云端请保持缺省的 `backend = "json"`。
 5. Deploy，约 2~4 分钟后得到 `xxx.streamlit.app` 公开网址
 
 **在线演示：<!-- 部署完成后把网址填在这里，例如 https://pop-music-personality.streamlit.app -->**
@@ -279,14 +356,20 @@ pyinstaller --clean -y streamlit_app.spec
 ```
 
 - 发行包结构：exe + `.streamlit/secrets.toml`（密码存 bcrypt 哈希）+ `使用说明.txt`
-- 注册账号持久化在 exe 旁的 `data/users.json`（本地文件系统，比云部署可靠）
+- 注册账号持久化在 exe 旁的 `data/users.json`（本地文件系统，比云部署可靠）；
+  **exe 默认走文件后端**，因为别人的电脑上通常没装 MySQL。若目标机器确实装了 MySQL，
+  也可以在 exe 旁的 `secrets.toml` 里加 `[mysql]` 段并把 `[storage] backend` 改成
+  `"mysql"`（驱动已打进 exe，无需另装）
 - 已知限制：体积大；杀毒软件可能误报（PyInstaller 通病）；本质仍是
   "本地服务 + 浏览器"形态，不是传统桌面窗口
 
 **打包踩坑记录**（详见 技术栈说明.md 第 35 条）：Streamlit 动态导入的
 `magic_funcs` 需声明 hiddenimports；`extra_streamlit_components` 与 `captcha`
 的数据文件需 collect_data_files；路径按 `sys.frozen` 分流（只读资源在
-`sys._MEIPASS`，可写文件在 exe 目录）。
+`sys._MEIPASS`，可写文件在 exe 目录）。新增的 `user_store.py` 同样要进
+**datas 与 hiddenimports 两处**；`pymysql` 只在函数体里延迟导入、`cryptography`
+更是 PyMySQL 运行时才拉起来的，静态分析都看不到，两个都必须显式写进 hiddenimports
+（`cryptography` 的二进制后端由 PyInstaller 自带的 hook 处理）。
 
 ## 九、如何运行（完整分析流程）
 

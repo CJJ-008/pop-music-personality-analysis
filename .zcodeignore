@@ -14,9 +14,13 @@ __pycache__/
 .env
 kaggle.json
 .streamlit/secrets.toml
+# 改动 secrets.toml 前留的备份，同样含明文凭据，绝不能入库
+.streamlit/*.bak
 
 # 注册用户的密码哈希（bcrypt）与用户信息，属于运行时数据
 data/users.json
+# 登录日志（文件后端写入；MySQL 后端写在库里，不落文件）
+data/login_log.json
 
 # ---- ZCode 本地工作文件 ----
 .zcode/

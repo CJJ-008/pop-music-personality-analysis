@@ -23,6 +23,9 @@
 | R8 | 将以上要求详细记录在 zcode.md | 即本文件 |
 | R9 | 在查询歌手界面，搜索歌手时把 TA 的代表作也展示出来 | 见决策记录 D28（歌手查询页新增「代表作」区） |
 | R10 | 搜索歌手时展示歌手照片，从全网公开的照片选择 | 见决策记录 D29（图源选型经实测后由用户拍板：Spotify 官方优先 + 网易云降级） |
+| R11 | 搜索栏输入几个字后自动联想，省得输入全部名字 | 见决策记录 D31（live 逐键提交 + fragment 隔离 + 候选芯片点选） |
+| R12 | 根据用户的口述（描述作曲风格、描述一段旋律）找到可能想找的歌手或歌曲 | 见决策记录 D32（第 7 页「💬 描述找歌」：风格描述可做并已实现；旋律匹配因数据集无旋律/音高数据而如实说明不做） |
+| R13 | 新建一个用户管理系统，用本机 MySQL 管理用户信息 | 见决策记录 D33（存储层双后端可切换 + 第 8 页「👤 用户管理」仅管理员可见） |
 
 ## 三、技术栈（已确认）
 
@@ -64,6 +67,10 @@
 | D27 | 小测评结果不随作答变化的修复 | ①只修对齐 bug ②对齐+index 两个都修 ③重写测评计算 | **② 双修 + 回归测试**（用户报告"无论勾选什么数据都不变"）：根因是 `z_` 前缀列名与维度名索引对齐失败→全 NaN→skipna 后距离全 0（静默）；叠加 `quiz_saved` 存 1~5 被 `index=` 当 0~4 用→选过 5 分后必崩，掩盖了第一个 bug；修复后加 `dist.isna()/max==0` 显式护栏；新增 scripts/test_quiz_varies.py 回归测试（AppTest：极端作答结果必须不同 + 重交不崩）；复盘见九之六 | 2026-09-28 | 已完成 |
 | D28 | 歌手查询页展示代表作 | ①只显示歌名列表 ②歌名+流行度+专辑+年份的表（流行度配进度条）③换成条形图 | **② 表格 + 进度条**（用户要求"搜索歌手时把代表作也展示出来"）：src/11 新增 `artist_top_tracks.csv`（1249 位入索引歌手 × 数据集内流行度最高的 5 首，含歌名/流行度/专辑/发行年份），app.py 查询页在歌手指标卡下方新增「代表作」区（st.dataframe + ProgressColumn，附口径说明 + ❓ 弹窗）；顺带修搜索框正则解析 bug（str.contains 默认 regex=True，A$AP Rocky / Ty Dolla $ign / $uicideBoy$ 等 8 位歌手按名字搜不到 → regex=False）；新增 scripts/test_artist_search.py 冒烟测试；浏览器端到端复验通过 | 2026-09-29 | 已完成 |
 | D29 | 歌手照片图源选型 | ①Spotify 官方 API+网易云降级 ②仅 Spotify 官方 ③仅网易云免密钥 ④Wikipedia/Wikimedia | **① Spotify 官方优先 + 网易云降级**（用户拍板）：先实测网络——Wikipedia/Deezer/TheAudioDB/Last.fm 均被本机 DNS 污染取不到图，iTunes 公开接口只给专辑封面，可用图源实际只剩 api.spotify.com 与 music.163.com；实现上（artist_photo.py）只认「名字归一化后对得上」的候选防张冠李戴，缓存语义区分「确认查无此人」（缓存 24h）与「请求失败」（不缓存、下次重试），全程不抛异常、取不到显示占位框；Spotify 凭据存 secrets 的 [spotify] 段（可选，未配置走网易云），requests 进 requirements 并声明进 exe hiddenimports | 2026-09-29 | 已完成 |
+| D30 | 标签栏滚动按钮时有时无的根治 | ①加长重试时间 ②改用 MutationObserver 常驻自愈 ③放弃注入改用其它组件 | **② 自愈式注入**（用户报告"小交互图标又没显示出来"）：实测定位为**执行时机竞态**——注入脚本常跑得比 pills 渲染快，那一刻一行都找不到，旧重试条件「找不到行就不重试」立即退出，之后无人补挂（所以时有时无、全看渲染快慢）；改为 MutationObserver 监听父页面 DOM 变化 + resize + 字体加载完成都触发重扫，发现溢出行就补挂（navReady 防重复）；浏览器验证：首次挂载、反复进出页面×3、手动拆除按钮全部恢复、点击滚动 0→220 生效 | 2026-09-30 | 已完成 |
+| D31 | 搜索框实时联想 | ①引入第三方组件 streamlit-searchbox ②原生 live 输入 + 候选芯片 ③原生 selectbox 全量下拉 ④前端自研 JS 注入 | **② 原生 live + 候选芯片**（用户要求"输入几个字自动联想，省得输入全部名字"）：先用 `st.text_input(type="search", live="400ms")` 实现逐键提交（原生组件默认只在回车/失焦提交，做不了联想），再用 `st.pills` 把候选做成点一下即查的芯片；性能上用 `@st.fragment` 把搜索区隔离，逐键只重跑该片段、不连带重绘照片/代表作/图表；fragment 内选歌手需 `st.rerun(scope="app")` 让主体跟着更新，并加「值真的变了才重绘」护栏防死循环；候选 ≤1 时自动选中省一次点击；不引入任何第三方依赖（exe 无需额外前端资源） | 2026-09-30 | 已完成 |
+| D32 | 按描述找歌/找歌手 | ①中文词典+音频特征检索 ②词典为主+可选 LLM 兜底 ③只用 LLM ④接音频指纹服务做旋律 | **① 中文词典 + 音频特征检索**（用户在四选一后拍板；同时拍板"旋律如实说明不做"、"新增歌级特征表"）：数据边界先行实测——数据集无 melody/pitch/chroma/歌词/音频文件/歌手性别，字面意义的旋律匹配不可行，页面与文档如实写明；实现分三层：style_search.py（144 词条词典 + parse_query 长词优先解析 + 逐约束打分）、src/13_style_search.py（导出歌级特征表 28356×17≈3MB / 标准化基准 / 词典 CSV / 示例 JSON + 方向自检 6/6）、app.py 第 7 页（fragment 隔离 + 示例按钮 on_click 回调写值 + 解释区 + Top10 歌曲/Top5 歌手带照片 + 跳转歌手查询页）；打分口径 85% 风格 + 15% 流行度（沿用混合推荐），并列按流行度/歌名兜底可复现；不支持的词（旋律/歌词/男女声/具体乐器/语种）当面说"做不到"并给替代建议 | 2026-09-30 | 已完成 |
+| D33 | 用户管理系统与用户数据存储 | ①直接把 data/users.json 换成 MySQL ②把存储抽象成可切换的双后端 ③另起一个独立的管理系统应用 | **② 双后端可切换**（用户拍板"按推荐方案来"，管理页范围选"基础 + 登录日志"）：项目有三个运行场景且对存储的要求互相矛盾——本地答辩想用 MySQL、Streamlit Cloud **连不到本机 127.0.0.1:3306**、exe 的目标机通常没装 MySQL，所以新增 user_store.py 把「读写用户」抽成统一接口（JsonUserStore / MySqlUserStore），由 secrets 的 `[storage] backend` 决定用哪个，**缺省 json** 保证云端与 exe 的行为零变化；auth.py 只换数据来源，登录/加密/Cookie 逻辑一行未动（`login_gate()` 返回签名也不变）；「启用/禁用」靠在 load_credentials() 里过滤掉禁用账号实现——不去改认证库内部逻辑，禁用账号在它眼里等于不存在；管理页嵌在 app.py 作第 8 页、仅 roles 含 admin 可见，**导航过滤 + 渲染分支双重判断**（只藏按钮不算权限控制，page 存在 session_state 里用户能自己改）；权限认 roles 不认「用户名等于 admin」，自助注册一律给 user 角色；登录日志记成功/失败与会话开始（失败时的用户名只能对「账号确实存在、只是密码错」尽力还原——认证库失败时不写 session_state['username']，只有 failed_login_attempts 计数器留下痕迹，其余如实记为「未知用户」，不猜）；MySQL 配置不全或连不上时自动回退文件存储并在页面提示，宁可降级可用也不让登录页起不来；凭据只存 secrets.toml（已 gitignore），建表脚本 scripts/init_db.py 幂等可重复执行；新增 scripts/test_user_store.py（含 MySQL 连不上则跳过、不假装通过的惯例）；实测建库（pop_music 的 users / login_log 两表）与真实登录链路全部通过，过程中被测试与复查抓出三个"不报错的错"（roles 列 JSON 解析错、MySQL rowcount 语义误报、被禁用管理员仍持有权限），详见进度跟踪条目 | 2026-10-01 | 已完成 |
 
 ## 五、数据集档案
 
@@ -107,14 +114,25 @@
 E:\流行音乐数据分析\
 ├── zcode.md              # 本文件：需求与决策记录（入 git）
 ├── README.md             # 简历用项目说明（入 git）
-├── app.py                # Streamlit 歌手推荐器仪表盘（入 git）
+├── app.py                # Streamlit 歌手推荐器仪表盘（8 个页面，入 git）
+├── auth.py               # 登录认证：门禁、角色判断、登录日志（入 git）
+├── user_store.py         # 用户存储层：文件/MySQL 双后端，按配置切换（入 git）
+├── glossary.py           # 名词小帮手：概念的通俗解释文案（入 git）
+├── artist_photo.py       # 歌手照片图源（Spotify 官方优先 + 网易云降级，入 git）
+├── style_search.py       # 描述找歌：中文词典解析 + 音频特征检索（入 git）
+├── launcher.py           # exe 启动器：起本地服务、开浏览器、端口探测（入 git）
+├── streamlit_app.spec    # PyInstaller 单文件打包配置（入 git）
 ├── requirements.txt      # 锁定版本的依赖清单（入 git，云端部署必需）
 ├── .python-version       # 指定 Python 3.12（入 git，云端部署用）
-├── .gitignore            # 数据、缓存不入库（入 git）
+├── .gitignore            # 数据、凭据、缓存不入库（入 git）
+├── .streamlit/
+│   └── secrets.toml.example  # 凭据模板（真实 secrets.toml 不入 git）
 ├── data/
 │   ├── README.md         # 数据下载指引（入 git）
 │   ├── raw/              # 原始数据（不入 git，见 data/README.md）
-│   └── processed/        # 清洗后数据（不入 git，脚本可重新生成）
+│   ├── processed/        # 清洗后数据（不入 git，脚本可重新生成）
+│   ├── users.json        # 注册用户（文件后端写入，不入 git）
+│   └── login_log.json    # 登录日志（文件后端写入，不入 git）
 ├── src/                  # 分析脚本（按编号即执行顺序）
 │   ├── config.py         # 共享配置：路径、中文字体、存图存表工具
 │   ├── 01_download_data.py
@@ -123,14 +141,26 @@ E:\流行音乐数据分析\
 │   ├── 04_classify_profile.py
 │   ├── 05_regression_popularity.py
 │   ├── 06_singer_mapping.py
-│   └── 07_build_report.py  # 程序化生成 Jupyter 分析报告（保证可复现）
+│   ├── 07_build_report.py  # 程序化生成 Jupyter 分析报告（保证可复现）
+│   ├── 08_tag_recommender.py   # 37 标签 × 流派亲和度矩阵（标签推荐页）
+│   ├── 09_quiz_recommender.py  # 小测评题库 + 人群基准 + KNN 基础表
+│   ├── 10_recommender_eval.py  # 推荐效果离线评测（留一法 + 混合推荐）
+│   ├── 11_artist_index.py      # 歌手索引 + 代表作表（歌手查询页）
+│   ├── 12_train_popularity_model.py  # 流行度预测模型训练与保存
+│   └── 13_style_search.py      # 描述找歌：导出歌级特征表/标准化基准/词典/示例
 ├── scripts/
-│   └── setup_github.sh     # GitHub 远程仓库配置脚本
+│   ├── setup_github.sh        # GitHub 远程仓库配置脚本
+│   ├── init_db.py             # 建库建表（MySQL 用户管理，幂等可重复执行）
+│   ├── test_user_store.py     # 回归：存储层双后端 + 凭据合并 + 管理页门禁
+│   ├── test_quiz_varies.py    # 回归：小测评结果随作答变化
+│   ├── test_artist_search.py  # 回归：歌手搜索联想 + 代表作表
+│   ├── test_artist_photo.py   # 回归：歌手照片图源
+│   └── test_style_search.py   # 回归：描述找歌（词典方向/打分/页面）
 ├── notebooks/            # Jupyter 探索草稿
 ├── reports/              # 最终分析报告 Notebook（入 git）
 └── outputs/
     ├── figures/          # 18 张图表 PNG（入 git，简历展示用）
-    └── tables/           # 31 张结果表 CSV（入 git，结论支撑 + 仪表盘数据源）
+    └── tables/           # 37 个结果表文件（34 CSV + 3 JSON，入 git，仪表盘数据源）
 ```
 
 ## 八、Git 规范
@@ -208,6 +238,74 @@ E:\流行音乐数据分析\
       → spec 进包 + [spotify] 凭据模板进 secrets.toml.example + requests 进 requirements；
       → 新增 scripts/test_artist_photo.py（名字比对 9 组用例 + 实际取图 + 限流自动跳过）；
       → 文档同步：README/技术栈说明/使用说明.txt 修正「全程离线」表述（唯一联网点=照片）
+- [x] 根治标签栏滚动按钮"时有时无"（D30）：注入脚本与 pills 渲染存在竞态，脚本先跑时
+        旧逻辑「找不到行就不重试」直接退出，之后再无人补挂
+      → 改为自愈式注入：MutationObserver 监听 DOM 变化 + resize + 字体加载，溢出行随时补挂；
+      → 浏览器验证：首次挂载/反复进出×3/手动拆除后自愈（400ms 内恢复）/点击滚动 0→220 全部通过
+- [x] 搜索框实时联想（D31，R11）：输入几个字母即列候选、点一下直接查（输入 just → Justin 系列）
+      → 原生实现：st.text_input(type="search", live="400ms") 逐键提交 + st.pills 候选芯片，
+        不引入第三方组件；@st.fragment 隔离重跑，打字只重跑搜索区不重绘整页；
+      → fragment 内选歌手用 st.rerun(scope="app") 让主体更新，并加相等护栏防无限重绘；
+      → 候选只剩 1 位时自动选中；无匹配仍给原有提示文案；
+      → 测试更新 scripts/test_artist_search.py（联想/点选/自动选中/特殊字符/无匹配，7 项全通过）；
+      → 浏览器实测逐键输入："j"→8 候选、"ju"→17 位、"jus"→收敛到 4 位；点候选后照片+画像+
+        代表作正确加载；清空输入与无匹配均回到提示态
+- [x] 按描述找歌/找歌手（D32，R12）：第 7 页「💬 描述找歌」，词典解析 + 音频特征检索
+      → 诚实前提先行实测：数据集无旋律/音高/歌词/音频文件/歌手性别，旋律匹配不可行，
+        页面与文档如实写明（未来需接音频指纹服务），只做风格/情绪/节奏/乐器感/场景/年代/调式；
+      → style_search.py：144 词条 / 255 约束词典（8 大类）+ 长词优先解析（等长重叠保留）
+        + 逐约束打分（方向按 z、区间带衰减）+ 85% 风格 / 15% 流行度混合，可复现可单测；
+      → src/13_style_search.py：导出歌级特征表（28356×17，3.0MB）/ 标准化基准 / 词典 CSV /
+        示例 JSON；自检 6/6（助眠能量↓ 蹦迪舞蹈性↑ 快歌节奏↑ 纯音乐器乐↑ 说唱流派100% 老歌≤2000）；
+      → app.py：末尾裸 else 改 elif 后追加第 7 页；示例按钮用 on_click 回调写值（规避控件改值报错）；
+        解释区逐词展示"我理解成了"，未识别词与不支持词明确提示；Top10 歌曲 + Top5 歌手（带照片、
+        可一键跳转歌手查询页）；❓ 新增「基于内容的检索」（概念 12→14、按钮 21→23）；
+      → 测试 scripts/test_style_search.py：词典方向 / 打分一致性 / 可复现 / 流派限定 /
+        不支持标记 / 页面渲染 / 乱码提示 / 旋律说明，8 项全通过；七页冒烟 0 异常
+- [x] 用户管理系统 + 用户数据双后端存储（D33，R13）：第 8 页「👤 用户管理」，仅管理员可见
+      → 分层先行：新增 user_store.py 承担「读写用户」（JsonUserStore / MySqlUserStore 同一套接口），
+        auth.py 只换数据来源、登录与加密逻辑一行未动，`login_gate()` 返回签名不变；
+      → 场景冲突实测确认：Streamlit Cloud 连不到本机 127.0.0.1:3306、exe 目标机通常没装 MySQL，
+        故 [storage] backend **缺省 json**，云端与 exe 行为零变化，本地才切 mysql；
+      → 凭据优先级保持「secrets 预置账号 > 库里的用户」，预置账号是 MySQL 故障时的登录兜底；
+      → 启用/禁用 = 在 load_credentials() 里过滤掉禁用账号（认证库拿不到它即登不进来），
+        不去改认证库内部逻辑；MySQL 连不上时自动回退文件存储 + 页面黄条提示，不让登录页崩；
+      → 权限认 roles 不认用户名；自助注册一律 user 角色；管理页导航过滤 + 渲染分支双重判断
+        （只藏按钮不算权限控制）；加自保护栏：不能禁用/删除自己、不能取消自己的 admin 角色；
+      → 登录日志记成功/失败/会话开始；失败时的用户名只能对「账号存在但密码错」尽力还原
+        （认证库失败时不写 session_state['username']，只有 failed_login_attempts 计数器留痕），
+        其余如实记为「未知用户」——不猜；凭据只存 secrets.toml，建表脚本 init_db.py 幂等；
+      → 测试 scripts/test_user_store.py 9 项全通过（文件后端 CRUD/日志滚动上限/字段映射/
+        账号规则/凭据合并与禁用过滤/MySQL 往返/端到端验收/后端选择/管理页门禁），
+        其中 MySQL 项在未配置时按既有惯例跳过并退出 0，不假装通过；
+      → 实测过程中被测试与复查抓出三个真 bug（都是"不报错的错"，值得记）：
+        ① roles 列存 JSON 文本 '["user"]'，读出来被 norm_roles 当逗号分隔 →
+           解析成 ['["user"]'] 这种带引号方括号的假角色名，权限判断永远不成立
+           （修：新增 parse_roles_column 先按 JSON 解析再退回逗号分隔）；
+        ② MySQL 的 rowcount 是「实际改动的行数」，新值与旧值相同时为 0 →
+           早先拿它判断用户是否存在，会把「保存了但内容没变」误报成「用户不存在」，
+           管理页上就是点一下保存角色弹一个假错误（修：先 SELECT 确认存在再 UPDATE）；
+        ③ 被禁用的管理员仍被判为管理员（current_roles 回查存储层时没看状态）；
+           更根本的是「已登录的账号被禁用后，本会话的 authentication_status 仍是 True，
+           login_gate 里 already 一短路就放行到 Cookie 过期为止」——
+           cookie 那条路其实会拦住（用户名已不在名单里），但本会话不会。
+           修：current_roles 过滤禁用账号 + 新增 _still_authorized()，
+           在下一次交互就核对账号是否仍然有效并登出提示；
+           存储层故障/后端降级时一律放行，不能让 MySQL 抖一下全体用户掉线；
+      → 连带修了测试自身的一处不真实：三个旧测试都用虚构用户名 "tester" 跳过登录门禁，
+        新守卫把这种「不存在的账号」判为失效后它们全挂——生产代码不该为迁就测试放宽，
+        改为播种 secrets 里真实存在的预置账号；
+      → 回归：test_artist_search / test_style_search / test_quiz_varies 全部仍通过（auth.py 动过）；
+      → 端到端实测（不是只测存储层）：① 管理页界面真的把用户写进 MySQL（邮箱/角色/状态/
+        bcrypt 哈希正确、明文未入库、能被登录校验通过、出现在登录名单里）；
+        ② 用真实登录表单登录库里的账号 → 成功、角色从库里读到 admin、日志写入 MySQL、
+        last_login_at 更新；③ 错误密码 → 被拒且失败也记入日志（用户名靠
+        failed_login_attempts 计数器还原成功）；④ 禁用后登录 → 被拒；
+        ⑤ 八页冒烟 0 异常，普通用户七页 0 异常
+      → 打包：user_store.py 进 datas 与 hiddenimports，pymysql / cryptography 进 hiddenimports
+        （两者都是延迟导入，静态分析看不到）；exe 未重新构建，留待发布时复验；
+      → 文档同步：README（目录树/登录与注册/持久化边界对照表/云端与 exe 说明）、
+        本文件（R13/D33/结构树/交付清单）、技术栈说明.md 第 51 条
 - [ ] Streamlit Community Cloud 部署（D14：已推迟——GitHub 授权/邮箱验证已完成，等功能完善后直接 Create app；Secrets 内容见 zcode 决策 D21 记录）
 
 ## 九之六、小测评「结果不随作答变化」故障复盘（2026-09-28，D27）
@@ -247,11 +345,22 @@ UI 状态回填类参数（如 index）要存"参数要求的口径"，不是"�
 
 ### 实现要点
 - **凭据来源**：`st.secrets`（本地 `.streamlit/secrets.toml` / 线上 Cloud 面板），
-  仓库只提交 `.streamlit/secrets.toml.example` 模板；真实 secrets 与 `data/users.json` 均已 gitignore
+  仓库只提交 `.streamlit/secrets.toml.example` 模板；真实 secrets、`data/users.json`
+  与 `data/login_log.json` 均已 gitignore（含改动 secrets 前留的 `.streamlit/*.bak`）
 - **密码存储**：bcrypt 哈希（`$2b$` 开头），任何环节不保存明文；已验证提交内容无明文泄漏
 - **注册持久化**：库的 `register_user` 只改内存字典、不写文件，而 Streamlit 每次交互
-  都会重建认证对象 → 自己实现 `data/users.json` 读写，与 secrets 预置账号合并（同名以预置账号优先）
-- **安全测试**：未登录时仪表盘内容零泄漏；错误密码/不存在用户均被拦截
+  都会重建认证对象 → 自己实现落盘，交给 `user_store.py`：本地可写 MySQL，
+  云端/exe 写 `data/users.json`；与 secrets 预置账号合并（同名以预置账号优先）
+- **角色与权限**：`roles` 含 `admin` 才能进第 8 页「👤 用户管理」；
+  自助注册一律 `user` 角色，管理员只能由管理员授予；预置账号须显式写 `roles = ["admin"]`
+- **登录日志**：记录成功 / 失败 / 会话开始（含 Cookie 免登录）；
+  失败时的用户名只能对「账号存在但密码错」还原（认证库失败时不写
+  `session_state['username']`，只有 `failed_login_attempts` 计数器留痕），其余记「未知用户」
+- **会话有效性核对**：已登录的账号若在本会话期间被禁用或删除，下一次交互就会被登出并提示
+  （否则 Cookie 那条路会拦住、但本会话的 `authentication_status` 会一直放行到 Cookie 过期）。
+  存储层故障或后端降级时一律放行——不能让 MySQL 抖一下把所有用户踢下线
+- **安全测试**：未登录时仪表盘内容零泄漏；错误密码/不存在用户均被拦截；
+  被禁用账号在 `load_credentials()` 阶段即被剔除，等同不存在
 
 ### 踩到的两个坑
 1. `st.secrets` 是**只读对象**，而库内部要回写哈希后的密码 →
@@ -261,38 +370,50 @@ UI 状态回填类参数（如 index）要存"参数要求的口径"，不是"�
    `authentication_controller.authentication_model.credentials`；已做多路径兜底。
 
 ### 已知限制（如实记录，不可对外夸大）
-1. **线上注册账号不持久**：Streamlit Community Cloud 文件系统是临时的，应用重启/
-   重新部署后 `data/users.json` 被重置，注册账号丢失（secrets 预置账号不受影响）。
-   真正长期持久化需接外部数据库（Supabase/PostgreSQL），属后续扩展。
+1. **持久化能力分场景，不能笼统说"接上了数据库"**：本地配了 `[storage] backend = "mysql"`
+   时用户数据进 MySQL、重启不丢；但 **Streamlit Community Cloud 仍走文件存储**——
+   云端服务器连不到本机 `127.0.0.1:3306`，而云端文件系统是临时的，
+   重启或重新部署后 `data/users.json` 被重置、注册账号依旧会丢（secrets 预置账号不受影响）。
+   想让云端也持久化，需换成有公网地址的托管数据库（Aiven、腾讯云等），属后续扩展。
 2. **防护意义有限**：D16 选"必须登录"同时 D17 选"支持注册"，实际效果是
-   "任何人注册一下就能进"，安全性提升有限，价值在于演示完整认证流程。
+   "任何人注册一下就能进"，安全性提升有限，价值在于演示完整认证流程与权限管理。
+3. **管理页改不了预置账号**：预置账号的事实来源是 `secrets.toml`，
+   在页面上改了下一次加载就被 secrets 覆盖回去，因此列表里标为只读。
 
 ## 九之四、仪表盘说明（app.py）
 
 - **定位**：交互式网页版「性格 × 流行歌手推荐器」，是 Jupyter 图文报告之外的另一种查看方式
 - **数据源**：只读 `outputs/tables/` 里已入库的结果表，不依赖原始数据——克隆仓库或云端部署
   后无需重新跑分析，冷启动即可用
-- **内容**（六页，侧边栏按钮式导航）：📊 数据总览 / 🎧 按画像推荐（3 个 K-Means 画像的
+- **内容**（八页，侧边栏按钮式导航；前七页所有人可见，第八页仅管理员）：📊 数据总览 / 🎧 按画像推荐（3 个 K-Means 画像的
   人口学卡片 + 五维雷达图 + 流派偏好 + Top 歌手条形图）/ 🏷️ 按性格标签找歌手（37 标签）/
-  📝 性格小测评（25 题 + KNN 找最像的 101 人）/ 🔍 歌手查询（歌手照片 + 代表作 +
-  音频特征对比 + 哪类画像最可能喜欢 TA）/ 🎚️ 流行度预测器（随机森林实时预测）
-- **本地运行**：`pip install -r requirements.txt` 后执行 `streamlit run app.py`
-- **已验证**：Streamlit AppTest 三画像切换 0 异常；scripts/ 下两组回归测试
-  （test_quiz_varies.py 测评随作答变化、test_artist_search.py 搜索与代表作表）全部通过；
+  📝 性格小测评（25 题 + KNN 找最像的 101 人）/ 🔍 歌手查询（歌手照片 + 实时联想 + 代表作 +
+  音频特征对比 + 哪类画像最可能喜欢 TA）/ 💬 描述找歌（中文描述 → 音频特征检索，144 词条）/
+  🎚️ 流行度预测器（随机森林实时预测）/ 👤 用户管理（用户增删改、重置密码、启用禁用、
+  角色设置、登录日志；存储后端可为本地 MySQL 或文件）
+- **本地运行**：`pip install -r requirements.txt` 后执行 `streamlit run app.py`；
+  想用 MySQL 管理用户时先跑 `python scripts/init_db.py` 建库建表
+- **已验证**：Streamlit AppTest 三画像切换 0 异常；scripts/ 下四组回归测试
+  （test_quiz_varies.py 测评随作答变化、test_artist_search.py 搜索与代表作表、
+  test_artist_photo.py 照片图源、test_style_search.py 描述找歌、
+  test_user_store.py 存储层双后端与管理页门禁 9 项）全部通过；
+  八页冒烟 0 异常（普通用户七页 0 异常）；MySQL 后端实测建库与真实登录链路
+  （成功 / 密码错 / 禁用三种情况）全部通过；
   真实服务器 health check 返回 ok + 浏览器端到端逐页复验
 
 ## 九之三、项目交付清单
 
 | 交付物 | 位置 | 说明 |
 |--------|------|------|
-| 需求与决策档案 | `zcode.md` | 29 项决策记录、完整结果、踩坑记录 |
+| 需求与决策档案 | `zcode.md` | 33 项决策记录、完整结果、踩坑记录 |
 | 简历用项目说明 | `README.md` | 含核心结论表、技术亮点、局限说明 |
 | 分析报告 | `reports/流行音乐数据分析报告.ipynb` | 26 单元格，已执行验证 0 报错 |
-| 交互式仪表盘 | `app.py` + `auth.py` | 六页（数据总览/画像/37标签/25题测评/歌手查询/流行度预测器）+ 登录注册认证 |
-| 分析脚本 | `src/01`~`12` | 数据获取 → 清洗 → 聚类 → 分类 → 回归 → 映射 → 报告生成 → 标签亲和度 → 测评基准 → 推荐评测 → 歌手索引与代表作 → 流行度模型 |
+| 交互式仪表盘 | `app.py` + `auth.py` + `user_store.py` | 八页（数据总览/画像/37标签/25题测评/歌手查询/描述找歌/流行度预测器/用户管理）+ 登录注册认证 + 角色权限 + 用户存储双后端 |
+| 分析脚本 | `src/01`~`13` | 数据获取 → 清洗 → 聚类 → 分类 → 回归 → 映射 → 报告生成 → 标签亲和度 → 测评基准 → 推荐评测 → 歌手索引与代表作 → 流行度模型 → 描述找歌词典与歌级特征表 |
 | 图表 | `outputs/figures/` | 18 张，全部中文渲染，已通过视觉检查 |
-| 结果表 | `outputs/tables/` | 31 张 CSV，Excel 可直接打开，也是仪表盘数据源 |
+| 结果表 | `outputs/tables/` | 37 个结果表文件（34 CSV + 3 JSON），Excel 可直接打开，也是仪表盘数据源 |
 | 部署配置 | `requirements.txt` + `.python-version` + `.streamlit/secrets.toml.example` | 锁定版本与凭据模板 |
+| 用户库建表脚本 | `scripts/init_db.py` | 建库建表（幂等），本地 MySQL 用户管理用 |
 | 远程备份 | GitHub `CJJ-008/pop-music-personality-analysis` | 公开仓库，异地备份已完成 |
 
 ## 九之二、实际分析结果（供简历与答辩引用）

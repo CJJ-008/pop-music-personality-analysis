@@ -1,20 +1,24 @@
 # -*- coding: utf-8 -*-
 """Streamlit 歌手推荐器：什么性格的年轻人喜欢什么样的流行歌手？
 
-六个页面（侧边栏按钮式导航）：
+八个页面（侧边栏按钮式导航；前七个所有人可见，第八个仅管理员）：
 1. 数据总览 —— 项目规模、推荐方式导引、模型成绩单；
 2. 按画像推荐 —— 3 个 K-Means 性格画像，查看各画像的流派与代表歌手；
 3. 按性格标签找歌手 —— 用户自由勾选 37 个性格/生活方式/兴趣标签，
    系统按「标签 → 参考人群 → 流派亲和度 → 歌手」链路实时合成推荐；
 4. 性格小测评 —— 25 道题算出五维得分，用 KNN 找最像的 101 人做推荐；
-5. 歌手查询 —— 输入歌手名（支持部分匹配），看 TA 的照片、代表作与数据画像，
+5. 歌手查询 —— 输入歌手名（实时联想），看 TA 的照片、代表作与数据画像，
    以及哪类性格画像最可能喜欢 TA（反向推荐）；
-6. 流行度预测器 —— 拖动音频特征滑块，随机森林实时预测流行度。
+6. 描述找歌 —— 用自己的话描述想要的风格（情绪/快慢/乐器感/场景/流派/年代），
+   按音频特征检索匹配的歌曲与歌手（基于内容的检索，词典解析、全程可解释）；
+7. 流行度预测器 —— 拖动音频特征滑块，随机森林实时预测流行度。
+8. 用户管理（仅管理员）—— 用户增删改、重置密码、启用/禁用、角色设置、登录日志。
 
 数据源：只读取 outputs/tables/ 下已入库的分析结果表（不依赖原始数据），
 因此克隆仓库或部署到 Streamlit Community Cloud 后无需重新跑分析、冷启动即可用。
 分析逻辑见 src/，完整分析报告见 reports/。
-登录认证见 auth.py（凭据存 st.secrets，注册用户持久化到 data/users.json）。
+登录认证见 auth.py（凭据存 st.secrets，角色与登录日志同在该模块）；
+用户数据存哪由 user_store.py 决定——本地可走 MySQL，云端/exe 走 data/users.json。
 专业知识点配 ❓ 问号弹窗（glossary.py），点开是给非专业用户的通俗解释。
 
 本地运行：
@@ -30,9 +34,23 @@ import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 
-from auth import login_gate, resolve_dirs
+from auth import (
+    ADMIN_ROLE,
+    PASSWORD_HINT_CN,
+    hash_password,
+    is_admin,
+    load_credentials,
+    login_gate,
+    password_problem,
+    preset_usernames,
+    resolve_dirs,
+    storage_note,
+    username_problem,
+)
 from artist_photo import get_artist_photo
 from glossary import head_kb, kb, kb_row
+import style_search
+from user_store import STATUS_ACTIVE, STATUS_DISABLED, fmt_local, get_store, norm_roles
 
 # 结果表在打包后位于 _MEIPASS 只读资源目录，源码运行时就是项目根目录
 RESOURCE_DIR, ROOT = resolve_dirs()
@@ -185,15 +203,411 @@ def recommend_section(genre_cn: str) -> None:
     st.markdown(f"**推荐歌手**：{'、'.join(esc(a) for a in top['歌手'].head(5))}")
 
 
+# ------------------------------------------------- 歌手搜索框（实时联想）----
+@st.fragment
+def artist_search_box(artists_all: pd.DataFrame) -> None:
+    """歌手搜索框 + 实时联想：输入几个字母就出候选，点一下直接查询。
+
+    单独包成 @st.fragment 是有意的：live 输入每停顿一次就触发重跑，
+    隔离后只重跑这一小块，不会连带重绘照片、代表作表和音频图表；
+    真正选定歌手（点候选、或唯一匹配自动选中）时才整页重绘一次。
+    选中的歌手存在 st.session_state["artist_pick"]，由页面主体读取渲染。
+    """
+    query = (st.text_input("歌手名（输入几个字母即可，下面会自动联想）", "",
+                           type="search", live="400ms", key="artist_query",
+                           placeholder="例如 Ed、Taylor、justin") or "").strip()
+
+    def commit(name: str | None) -> None:
+        """记录当前选中的歌手；值真的变了才整页重绘（否则会无限重跑）。"""
+        if st.session_state.get("artist_pick") == name:
+            return
+        if name is None:
+            st.session_state.pop("artist_pick", None)
+        else:
+            st.session_state["artist_pick"] = name
+        st.rerun(scope="app")
+
+    if not query:
+        commit(None)
+        return
+
+    # regex=False：歌手里有 A$AP Rocky、Ty Dolla $ign 这类带正则符号的名字，
+    # 按字面匹配才搜得到（用户输入的就是歌手名的一部分，不是正则）
+    matches = artists_all[artists_all["歌手"].str.contains(query, case=False, na=False,
+                                                           regex=False)]
+    if matches.empty:
+        commit(None)
+        st.warning(f"没有找到包含「{query}」的歌手（索引覆盖歌曲数≥5 的 "
+                   f"{len(artists_all)} 位歌手）。试试更短的关键词。")
+        return
+
+    if len(matches) == 1:
+        only = matches["歌手"].iloc[0]
+        st.caption(f"唯一匹配：**{esc(only)}**")
+        commit(only)          # 只剩一个候选时直接选中，省一次点击
+        return
+
+    st.caption(f"匹配到 {len(matches)} 位歌手（按平均流行度排序），点一下直接查看：")
+    picked = st.pills("联想结果", matches["歌手"].head(8).tolist(),
+                      selection_mode="single", key="artist_suggest",
+                      label_visibility="collapsed")
+    if picked:
+        commit(picked)
+
+
+# ------------------------------------------------- 描述找歌（第 7 页引擎）----
+@st.fragment
+def style_search_page(songs: pd.DataFrame, stats: pd.DataFrame,
+                      examples: list[str]) -> None:
+    """「💬 描述找歌」整页内容：描述 → 我理解成了什么 → 匹配歌曲与歌手。
+
+    整页包成 @st.fragment：live 输入每次停顿都会重跑一次检索（28356 首歌的
+    向量化打分约几十毫秒），隔离后不会连带重跑应用其它部分。
+
+    数据边界（如实写进页面，不假装能做）：数据集只有音频特征，没有旋律/音高、
+    歌词、乐器识别、歌手性别字段，所以"哼一段旋律""按歌词""找女声"这类都做不到，
+    解析器会把这类词明确标注为"不支持"而不是静默忽略。
+    """
+    query_text = st.text_input("描述你想要的风格（情绪、快慢、乐器感、场景、流派、年代都可以）",
+                               "", type="search", live="500ms", key="style_query",
+                               placeholder="例如：钢琴伴奏的深夜抒情歌")
+
+    # 示例短语：用 on_click 回调写 session_state（回调先于脚本执行，规避
+    # "控件实例化后不可改值"的报错），点一下即填入并出结果
+    example_cols = st.columns(len(examples))
+    for col, ex in zip(example_cols, examples):
+        with col:
+            st.button(ex, key=f"style_ex_{ex}",
+                      on_click=lambda e=ex: st.session_state.__setitem__("style_query", e))
+
+    query_text = (query_text or "").strip()
+    if not query_text:
+        st.info("在上方输入描述开始找歌，或点一个示例试试；也可以混着写，"
+                "例如「失恋后想听的慢歌」「小调忧郁的说唱」")
+        kb_row("content_based", label="📖 名词小课堂：这种找歌方式是什么原理")
+        return
+
+    query = style_search.parse_query(query_text)
+
+    # ---- 不支持的说法：识别得出但数据集没有对应信息，明说而不是静默忽略 ----
+    if query.unsupported:
+        for term, reason, advice in query.unsupported:
+            st.warning(f"「{term}」我做不到：{reason}。{advice}")
+
+    if query.empty:
+        st.warning("没听懂你的描述。试试这些说法，或点上面的示例：")
+        with st.expander("看看我能听懂哪些词（共 %d 个词条）" % len(style_search.LEXICON)):
+            by_cat = {}
+            for term, category, desc, *_ in style_search.LEXICON:
+                by_cat.setdefault(category, []).append(term)
+            for category, terms in by_cat.items():
+                st.markdown(f"**{category}**：" + "、".join(terms))
+        return
+
+    # ---- 我理解成了什么：逐词展示解读，让推荐过程可核查 ----
+    st.subheader("我理解成了")
+    for term, _category, desc in query.hits:
+        st.markdown(f"- **{term}** → {desc}")
+    if query.unknown:
+        st.caption("这些词我没听懂（已忽略）：" + "、".join(query.unknown)
+                   + "；支持的说法点上面的词表展开看")
+    if query.genres:
+        st.caption("已按流派限定：" + "、".join(query.genres)
+                   + "（明说了流派就只在该流派里找）")
+
+    scored = style_search.score_songs(songs, stats, query, top_n=10)
+    if scored.empty:
+        st.warning("这个组合太冷门了，没找到匹配的歌曲——试试去掉一两个条件")
+        return
+
+    # ---- 匹配歌曲 ----
+    head_kb(f"匹配的歌曲（候选 {len(songs):,} 首）", "content_based")
+    st.dataframe(
+        scored[["歌曲名", "歌手", "流派", "年份", "流行度", "匹配分", "为什么"]],
+        hide_index=True, width="stretch",
+        height=min(320, 35 * len(scored) + 38),
+        column_config={
+            "匹配分": st.column_config.ProgressColumn(
+                "匹配分", min_value=0, max_value=1, format="%.2f"),
+            "为什么": st.column_config.TextColumn("为什么匹配", width="large"),
+        })
+    st.caption("匹配分 = 85% × 风格匹配 + 15% × 流行度（混入流行度是为了不让结果全是冷门歌，"
+               "口径与「混合推荐」一致）；「为什么匹配」取贡献最大的三个特征")
+
+    # ---- 匹配歌手（带照片，可跳转歌手查询页）----
+    st.subheader("匹配的歌手")
+    artists = style_search.top_artists(scored, songs, top_n=5)
+
+    def _goto_artist(name: str) -> None:
+        """跳转到歌手查询页看该歌手：同时把名字填进那边的搜索框。
+
+        只设 artist_pick 不够——歌手查询页的搜索框为空时会把选中清掉；
+        带上名字过去，搜索联想会命中唯一匹配，画像直接渲染。
+        按钮在 fragment 内，点它默认只重跑片段，必须显式整页重绘才会换页。
+        """
+        st.session_state["artist_pick"] = name
+        st.session_state["artist_query"] = name
+        st.session_state["page"] = "🔍 歌手查询"
+        st.rerun(scope="app")
+
+    for i, row in artists.iterrows():
+        c1, c2 = st.columns([1, 4])
+        with c1:
+            photo = get_artist_photo(row["歌手"])
+            if photo:
+                st.image(photo["url"], width="stretch")
+        with c2:
+            st.markdown(f"**{esc(row['歌手'])}**　命中 **{row['命中歌曲数']}** 首，"
+                        f"最高匹配分 {row['最高匹配分']:.2f}，代表曲目《{esc(row['代表歌曲'])}》")
+            st.button("在歌手查询页看 TA 的完整画像", key=f"style_goto_{row['歌手']}",
+                      on_click=_goto_artist, args=(row["歌手"],))
+
+    st.caption("局限（如实说明）：这套检索只看数据集里有的 12 个音频特征与流派/年代信息，"
+               "不支持描述旋律、歌词内容或歌手性别——数据集里没有这些数据，"
+               "乐器类描述也是用「原声度/器乐占比」近似的。")
+
+
+# ================================================= 页面8: 用户管理（仅管理员）====
+def render_user_admin() -> None:
+    """用户管理页：列表、新增、重置密码、启用/禁用、角色、资料、删除、登录日志。
+
+    仅管理员可见——侧边栏不显示按钮，页面8 里还会再判一次（只藏按钮不算权限控制）。
+    预置账号（secrets 里的）在列表里标出来但不可修改：它们的事实来源是
+    secrets.toml，在页面上改了下次加载就被覆盖回去，不如直接说明不能改。
+    """
+    store = get_store()
+    me = st.session_state.get("username")
+
+    st.title("👤 用户管理")
+    backend_desc = "MySQL 数据库" if store.backend == "mysql" else "data/users.json（文件）"
+    st.caption(f"存储后端：**{store.source_label}** · {backend_desc}")
+
+    # 操作类消息用「写入 session_state → 重跑 → 在顶部显示」的闪信模式：
+    # 直接在表单里 st.success 会被紧接着的 st.rerun() 冲掉，用户看不到。
+    flash = st.session_state.pop("_admin_flash", None)
+    if flash:
+        st.success(flash)
+
+    note = getattr(store, "note", None) or storage_note()
+    if note:
+        st.warning(note)
+
+    ok, message = store.ping()
+    (st.success if ok else st.error)(f"存储自检：{message}")
+
+    try:
+        records = store.list_users()
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"读取用户列表失败：{exc}")
+        st.stop()
+
+    credentials, _ = load_credentials()
+    preset = set(preset_usernames())
+
+    def _flash_and_rerun(text: str) -> None:
+        st.session_state["_admin_flash"] = text
+        st.rerun()
+
+    # ---------------------------------------------------------- 用户列表 ----
+    st.subheader("用户列表")
+    rows = []
+    for username, record in records.items():
+        rows.append({
+            "用户名": username,
+            "来源": "预置（secrets）" if username in preset else store.source_label,
+            "状态": "已禁用" if record.get("status") == STATUS_DISABLED else "启用中",
+            "角色": "、".join(record.get("roles") or []) or "—",
+            "邮箱": record.get("email") or "—",
+            "姓名": f"{record.get('last_name', '')}{record.get('first_name', '')}".strip() or "—",
+            "创建时间": fmt_local(record.get("created_at")),
+            "最后登录": fmt_local(record.get("last_login_at")),
+        })
+    # 预置账号若不在存储里也要列出来——它是登录兜底，看不见才危险
+    for username in sorted(preset - set(records)):
+        entry = (credentials.get("usernames") or {}).get(username) or {}
+        rows.append({
+            "用户名": username,
+            "来源": "预置（secrets）",
+            "状态": "启用中",
+            "角色": "、".join(norm_roles(entry.get("roles"))) or "—",
+            "邮箱": entry.get("email") or "—",
+            "姓名": f"{entry.get('last_name', '')}{entry.get('first_name', '')}".strip() or "—",
+            "创建时间": "—",
+            "最后登录": "—",
+        })
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True,
+                 height=min(420, 35 * len(rows) + 38))
+    st.caption("「预置（secrets）」的账号来自 `.streamlit/secrets.toml`，页面不可修改"
+               "（改了下次加载会被 secrets 覆盖）；它们同时也是 MySQL 挂掉时的登录兜底。")
+
+    # ---------------------------------------------------------- 新增用户 ----
+    st.divider()
+    st.subheader("新增用户")
+    with st.form("admin_create_user", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        new_username = c1.text_input("用户名", help="1~20 位字母、数字、下划线或连字符，不支持中文")
+        new_email = c2.text_input("邮箱（可留空）")
+        c3, c4 = st.columns(2)
+        new_last = c3.text_input("姓（可留空）")
+        new_first = c4.text_input("名（可留空）")
+        new_password = st.text_input("密码", type="password", help=PASSWORD_HINT_CN)
+        new_roles = st.multiselect("角色", [ADMIN_ROLE, "user"], default=["user"],
+                                   help="admin 可进入本页；user 只能用其余七个页面")
+        if st.form_submit_button("创建用户", type="primary"):
+            problem = username_problem(new_username) or password_problem(new_password)
+            if problem:
+                st.error(problem)
+            elif not new_roles:
+                st.error("至少选一个角色")
+            else:
+                try:
+                    store.create_user(new_username, {
+                        "email": new_email,
+                        "first_name": new_first,
+                        "last_name": new_last,
+                        "password_hash": hash_password(new_password),
+                        "roles": new_roles,
+                        "status": STATUS_ACTIVE,
+                    })
+                    _flash_and_rerun(f"已创建用户「{new_username}」")
+                except Exception as exc:  # noqa: BLE001 - 重名、库不可用等
+                    st.error(f"创建失败：{exc}")
+
+    # ------------------------------------------------------ 管理已有用户 ----
+    st.divider()
+    st.subheader("管理已有用户")
+    editable = sorted(u for u in records if u not in preset)
+    if not editable:
+        st.caption("存储里还没有可管理的用户（预置账号的事实来源是 secrets.toml，页面不可改）。")
+    else:
+        target = st.selectbox("选择用户", editable, key="admin_target")
+        record = records[target]
+        is_self = target == me
+        state = "已禁用" if record.get("status") == STATUS_DISABLED else "启用中"
+        st.caption(f"`{target}` · {state} · 角色：{'、'.join(record.get('roles') or []) or '无'}"
+                   + ("　←　这是你当前登录的账号，不能禁用或删除" if is_self else ""))
+
+        tab_pwd, tab_role, tab_info, tab_danger = st.tabs(
+            ["重置密码", "角色与状态", "修改资料", "删除账号"])
+
+        with tab_pwd:
+            with st.form("admin_reset_pwd", clear_on_submit=True):
+                pwd = st.text_input("新密码", type="password", help=PASSWORD_HINT_CN)
+                pwd2 = st.text_input("再输一次", type="password")
+                if st.form_submit_button("重置密码", type="primary"):
+                    problem = password_problem(pwd)
+                    if problem:
+                        st.error(problem)
+                    elif pwd != pwd2:
+                        st.error("两次输入的密码不一致")
+                    else:
+                        try:
+                            store.set_password(target, hash_password(pwd))
+                            _flash_and_rerun(f"已重置「{target}」的密码")
+                        except Exception as exc:  # noqa: BLE001
+                            st.error(f"重置失败：{exc}")
+            st.caption("密码只存 bcrypt 哈希，页面上无法查看原密码——忘记就只能重置。")
+
+        with tab_role:
+            with st.form("admin_set_role"):
+                roles = st.multiselect("角色", [ADMIN_ROLE, "user"],
+                                       default=record.get("roles") or ["user"])
+                if st.form_submit_button("保存角色", type="primary"):
+                    if not roles:
+                        st.error("至少保留一个角色")
+                    elif is_self and ADMIN_ROLE not in roles:
+                        # 自保：取消自己的管理员角色 = 把自己锁在管理页外面
+                        st.error("不能取消自己的管理员角色（否则你将无法再进入本页）")
+                    else:
+                        try:
+                            store.set_roles(target, roles)
+                            _flash_and_rerun(f"已更新「{target}」的角色")
+                        except Exception as exc:  # noqa: BLE001
+                            st.error(f"保存失败：{exc}")
+
+            disabled = record.get("status") == STATUS_DISABLED
+            label = "✅ 启用该账号" if disabled else "🚫 禁用该账号"
+            if st.button(label, key="admin_toggle_status",
+                         disabled=is_self, help="不能禁用当前登录的账号" if is_self else None):
+                try:
+                    store.set_status(target, STATUS_ACTIVE if disabled else STATUS_DISABLED)
+                    _flash_and_rerun(f"已{'启用' if disabled else '禁用'}「{target}」")
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"操作失败：{exc}")
+            st.caption("禁用不是删除：账号与密码都还在，只是登录时被过滤掉、登不进来，"
+                       "随时可以再启用。")
+
+        with tab_info:
+            with st.form("admin_edit_info"):
+                email = st.text_input("邮箱", value=record.get("email") or "")
+                last_name = st.text_input("姓", value=record.get("last_name") or "")
+                first_name = st.text_input("名", value=record.get("first_name") or "")
+                if st.form_submit_button("保存资料", type="primary"):
+                    try:
+                        store.update_user(target, {
+                            "email": email, "first_name": first_name, "last_name": last_name,
+                        })
+                        _flash_and_rerun(f"已更新「{target}」的资料")
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"保存失败：{exc}")
+
+        with tab_danger:
+            st.warning("删除是**不可恢复**的：账号与密码哈希都会从存储里移除。"
+                       "如果只是想暂时不让登录，请用「角色与状态」里的禁用。")
+            confirm = st.checkbox(f"我确认要永久删除「{target}」", key="admin_confirm_del")
+            if st.button("删除账号", type="primary", disabled=is_self or not confirm,
+                         key="admin_delete", help="不能删除当前登录的账号" if is_self else None):
+                try:
+                    store.delete_user(target)
+                    _flash_and_rerun(f"已删除用户「{target}」")
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"删除失败：{exc}")
+
+    # ---------------------------------------------------------- 登录日志 ----
+    st.divider()
+    st.subheader("登录日志")
+    try:
+        logs = store.list_login_logs(limit=200)
+    except Exception as exc:  # noqa: BLE001
+        logs = []
+        st.error(f"读取登录日志失败：{exc}")
+    if logs:
+        log_df = pd.DataFrame([{
+            "时间": fmt_local(row["login_at"]),
+            "用户名": row["username"],
+            "结果": "成功" if row["success"] else "失败",
+            "IP": row["ip"],
+        } for row in logs])
+        st.dataframe(log_df, width="stretch", hide_index=True,
+                     height=min(420, 35 * len(log_df) + 38))
+        st.caption("最多显示最近 200 条，时间按本机时区显示（存储里是 UTC）。"
+                   "登录失败时认证库不记录用户输入的用户名，只有「账号确实存在、"
+                   "只是密码错」这种情况能还原出来，其余如实记为「（未知用户）」。")
+    else:
+        st.caption("暂无登录记录。")
+
+
 # ---------------------------------------------------------------- 侧边栏 ----
 PAGES = ["📊 数据总览", "🎧 按画像推荐", "🏷️ 按性格标签找歌手",
-         "📝 性格小测评", "🔍 歌手查询", "🎚️ 流行度预测器"]
+         "📝 性格小测评", "🔍 歌手查询", "💬 描述找歌", "🎚️ 流行度预测器"]
+ADMIN_PAGE = "👤 用户管理"
+
+# 管理页只对管理员可见。注意这里只决定「显不显示按钮」，
+# 真正的权限判断在页面8 的渲染分支里——用户完全可以自己把 session_state.page
+# 改成 ADMIN_PAGE，只靠隐藏按钮不构成权限控制。
+_IS_ADMIN = is_admin()
+_VISIBLE_PAGES = PAGES + ([ADMIN_PAGE] if _IS_ADMIN else [])
+
 with st.sidebar:
     # 按钮式导航：当前页高亮，点击即切换（替代 radio 的圆形勾选样式）
     if "page" not in st.session_state:
-        st.session_state.page = PAGES[0]
+        st.session_state.page = _VISIBLE_PAGES[0]
+    # 角色变化（例如管理员被降级）后会残留在已不可见的页名上，
+    # 那时既没有按钮可点、页面也不渲染，会停在一片空白里，所以纠正回第一页
+    if st.session_state.page not in _VISIBLE_PAGES:
+        st.session_state.page = _VISIBLE_PAGES[0]
     page = st.session_state.page
-    for p in PAGES:
+    for p in _VISIBLE_PAGES:
         if st.button(p, key=f"nav_{p}", use_container_width=True,
                      type="primary" if p == page else "secondary") and p != page:
             st.session_state.page = p
@@ -396,12 +810,17 @@ elif page == "🏷️ 按性格标签找歌手":
   .tag-scroll-btn.right { right: 2px; }
 </style>
 """)
+    # 自愈式注入（D30）：脚本执行时机与 pills 渲染存在竞态——脚本跑得比 pills 快时
+    # 一行都找不到，旧版「找不到行就不重试」的逻辑会直接退出，按钮从此消失。
+    # 改为持续观察父页面：DOM 变化 / 窗口缩放 / 字体加载完成都重新扫一遍，
+    # 任何时刻发现溢出行就补挂按钮（navReady 防重复），从此与渲染顺序无关。
     components.html("""
 <script>
 (function () {
   var doc = window.parent.document;
-  var tries = 0;
-  function setup() {
+  try { doc.defaultView.__tagScrollAlive = (doc.defaultView.__tagScrollAlive || 0) + 1; } catch (e) {}
+
+  function decorate() {
     doc.querySelectorAll('[data-testid="stButtonGroup"] > div').forEach(function (row) {
       if (row.dataset.navReady === "1") return;
       if (row.scrollWidth <= row.clientWidth + 4) return;  // 没溢出的行不需要按钮
@@ -422,11 +841,19 @@ elif page == "🏷️ 按性格标签找歌手":
       mkBtn("left", "‹", -220);
       mkBtn("right", "›", 220);
     });
-    var remaining = [...doc.querySelectorAll('[data-testid="stButtonGroup"] > div')]
-      .filter(function (r) { return r.dataset.navReady !== "1"; }).length;
-    if (remaining && tries++ < 25) setTimeout(setup, 300);
   }
-  setup();
+
+  // 触发器合并：页面任何 DOM 变化 / 窗口缩放 / 字体加载完成，都安排一次重扫
+  var pending = null;
+  function schedule() {
+    if (pending) return;
+    pending = setTimeout(function () { pending = null; decorate(); }, 120);
+  }
+  if (doc.body) new MutationObserver(schedule).observe(doc.body,
+      { childList: true, subtree: true });
+  doc.defaultView.addEventListener("resize", schedule);
+  if (doc.fonts && doc.fonts.ready) doc.fonts.ready.then(schedule);
+  decorate();
 })();
 </script>
 """, height=1)
@@ -678,29 +1105,16 @@ elif page == "🔍 歌手查询":
     top_tracks = load_csv("artist_top_tracks.csv")
 
     st.title("🔍 歌手查询")
-    st.caption("输入歌手名（支持模糊匹配），查看 TA 的照片、代表作与数据画像，"
+    st.caption("输入歌手名（输入几个字母就会自动联想），查看 TA 的照片、代表作与数据画像，"
                "以及哪类性格的人最可能喜欢 TA")
 
-    name = st.text_input("歌手名（支持部分匹配，如 Ed、Taylor、Jay）", "").strip()
-    if not name:
+    artist_search_box(artists_all)
+
+    pick = st.session_state.get("artist_pick")
+    if not pick:
         st.info("在上方输入歌手名开始查询，例如 Ed Sheeran、Billie Eilish、DaBaby")
         st.stop()
-
-    # regex=False：歌手里有 A$AP Rocky、Ty Dolla $ign 这类带正则符号的名字，
-    # 按字面匹配才搜得到（用户输入的就是歌手名的一部分，不是正则）
-    matches = artists_all[artists_all["歌手"].str.contains(name, case=False, na=False,
-                                                           regex=False)]
-    if matches.empty:
-        st.warning(f"没有找到包含「{name}」的歌手（索引覆盖歌曲数≥5 的 "
-                   f"{len(artists_all)} 位歌手）。试试更短的关键词。")
-        st.stop()
-
-    if len(matches) > 1:
-        st.caption(f"匹配到 {len(matches)} 位歌手，显示最热门的前 8 位：")
-        pick = st.selectbox("选择歌手", matches["歌手"].head(8).tolist())
-        row = matches[matches["歌手"] == pick].iloc[0]
-    else:
-        row = matches.iloc[0]
+    row = artists_all[artists_all["歌手"] == pick].iloc[0]
 
     genre_cn = row["流派中文"]
     c_photo, c_body = st.columns([1, 3.4])
@@ -786,8 +1200,8 @@ elif page == "🔍 歌手查询":
     else:
         st.warning(f"流派「{genre_cn}」暂无画像偏好数据")
 
-# ============================================================ 页面5: 预测器 ====
-else:
+# ============================================================ 页面6: 预测器 ====
+elif page == "🎚️ 流行度预测器":
     import joblib
     import numpy as np
 
@@ -859,3 +1273,24 @@ else:
     st.plotly_chart(fig, width="stretch")
     st.caption("注意：发行年份是最强预测因子——流行度指标存在「新歌优势」。"
                "这与回归分析的结论一致：歌曲走红主要由宣发与传播驱动。")
+
+# ============================================================ 页面7: 描述找歌 ====
+elif page == "💬 描述找歌":
+    songs_all = load_csv("style_song_matrix.csv")
+    feat_stats = load_csv("style_feature_stats.csv", index_col=True)
+    style_examples = json.loads((TAB / "style_examples.json").read_text(encoding="utf-8"))
+
+    st.title("💬 描述找歌")
+    st.caption("用自己的话描述想要的风格——情绪、快慢、乐器感、场景、流派、年代都可以，"
+               "系统按音频特征检索出最匹配的歌曲与歌手")
+
+    style_search_page(songs_all, feat_stats, style_examples)
+
+# ============================================================ 页面8: 用户管理 ====
+elif page == ADMIN_PAGE:
+    # 双重判断：侧边栏已经藏了按钮，这里再挡一次。
+    # 只藏按钮不是权限控制——page 存在 session_state 里，用户能自己改。
+    if not _IS_ADMIN:
+        st.error("用户管理仅对管理员开放。")
+        st.stop()
+    render_user_admin()

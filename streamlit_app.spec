@@ -11,11 +11,13 @@ GitHub 单文件 100MB 限制，不能也不应提交进仓库。
 from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
 datas = [
-    # 应用本体与认证/问号弹窗/歌手照片模块：streamlit 运行时以脚本方式执行 app.py，故作为数据文件携带
+    # 应用本体与认证/问号弹窗/歌手照片/描述找歌/用户存储模块：streamlit 运行时以脚本方式执行 app.py，故作为数据文件携带
     ("app.py", "."),
     ("auth.py", "."),
+    ("user_store.py", "."),
     ("glossary.py", "."),
     ("artist_photo.py", "."),
+    ("style_search.py", "."),
     # 仪表盘唯一的数据源：分析结果表
     ("outputs/tables", "outputs/tables"),
     # 流行度预测模型（预测器页用）
@@ -42,10 +44,19 @@ a = Analysis(
     hiddenimports=[
         "auth",
         # app.py 是数据文件，静态分析看不到它 import 的模块，逐个显式声明
+        "user_store",
         "glossary",
         "artist_photo",
+        "style_search",
         # Spotify 官方 API 客户端（artist_photo.py 用，requests 随 streamlit 依赖树进包）
         "requests",
+        # MySQL 驱动：只在 user_store.py 的函数体里延迟 import，而 user_store.py 本身
+        # 又是数据文件，静态分析两头都看不到，必须显式声明。
+        # exe 默认走文件后端，但用户若在 exe 旁配了 [mysql] 就得能连上，故一并打进包。
+        # cryptography 是 PyMySQL 做 caching_sha2_password 认证时延迟 import 的依赖，
+        # 其二进制后端由 PyInstaller 自带的 hook-cryptography 处理。
+        "pymysql",
+        "cryptography",
         # Streamlit 脚本执行器在运行时动态 import 此模块，静态分析看不到，必须显式声明
         "streamlit.runtime.scriptrunner.magic_funcs",
         # 流行度模型（joblib pickle）反序列化时需要的 sklearn 模块——

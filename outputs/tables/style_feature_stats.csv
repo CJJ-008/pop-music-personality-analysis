@@ -1,0 +1,10 @@
+﻿特征,均值,标准差
+danceability,0.6534,0.1458
+energy,0.6984,0.1835
+valence,0.5104,0.2343
+acousticness,0.1772,0.2228
+instrumentalness,0.0911,0.2325
+liveness,0.191,0.1559
+speechiness,0.108,0.1026
+loudness,-6.8177,3.0362
+tempo,120.9562,26.9546

@@ -9,6 +9,8 @@ streamlit==1.64.0
 plotly==7.1.0
 streamlit-authenticator==0.4.2   # 登录/注册认证（依赖 bcrypt、captcha、pillow）
 requests==2.34.2                 # 歌手照片的公开图源请求（artist_photo.py 直接依赖）
+PyMySQL==1.2.3                   # 用户库（user_store.py）：本地 [storage] backend="mysql" 时走它
+cryptography==50.0.1             # MySQL 8 默认的 caching_sha2_password 认证需要（PyMySQL 依赖）
 
 # ---- 数据处理与建模（src/ 分析流程）----
 pandas==3.0.3
