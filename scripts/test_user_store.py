@@ -279,6 +279,139 @@ def test_mysql_roundtrip() -> None:
         store.delete_user(username)
 
 
+def test_plan_user_changes() -> None:
+    """网格写计划的纯函数：字段级 diff、护栏、脏数据。这是「保存修改」的质检员。"""
+    original = {
+        "alice": {"email": "a@x.com", "first_name": "A", "last_name": "Li",
+                  "roles": ["user"], "status": us.STATUS_ACTIVE},
+        "bob": {"email": "b@x.com", "first_name": "B", "last_name": "Ob",
+                "roles": ["admin"], "status": us.STATUS_ACTIVE},
+    }
+
+    def row(username, *, email=None, status="启用中", roles="user", delete=False, **kw):
+        base = {"删除?": delete, "用户名": username, "状态": status, "角色": roles,
+                "邮箱": email if email is not None else "x@x.com",
+                "姓": kw.get("姓", ""), "名": kw.get("名", "")}
+        return base
+
+    # 没改任何东西 → 空计划（把网格原样点保存不该产生写库动作）
+    plan = us.plan_user_changes(original, [
+        {"删除?": False, "用户名": "alice", "状态": "启用中", "角色": "user",
+         "邮箱": "a@x.com", "姓": "Li", "名": "A"}])
+    assert not plan.has_changes and not plan.errors, "未修改却产生了写库动作"
+
+    # 只改一格 → 只写那一格（连同没变的列一起写，等于无意义地全量覆盖）
+    plan = us.plan_user_changes(original, [
+        {"删除?": False, "用户名": "alice", "状态": "启用中", "角色": "user",
+         "邮箱": "new@x.com", "姓": "Li", "名": "A"}])
+    assert plan.updates == [("alice", {"email": "new@x.com"})], f"diff 不精确：{plan.updates}"
+    assert not plan.errors
+
+    # 状态与角色的中文标签要能映射回内部值
+    plan = us.plan_user_changes(original, [
+        {"删除?": False, "用户名": "alice", "状态": "已禁用", "角色": "admin, user",
+         "邮箱": "a@x.com", "姓": "Li", "名": "A"}])
+    assert plan.updates == [("alice", {"status": us.STATUS_DISABLED,
+                                       "roles": ["admin", "user"]})], plan.updates
+
+    # 勾选删除 → 删除动作；同时改了字段也只删不改
+    plan = us.plan_user_changes(original, [
+        {"删除?": True, "用户名": "alice", "状态": "已禁用", "角色": "admin",
+         "邮箱": "z@z.com", "姓": "Z", "名": "Z"}])
+    assert plan.deletes == ["alice"] and not plan.updates, "删除行不应再产生字段更新"
+
+    # ---- 护栏：对自己账号的三条 ----
+    plan = us.plan_user_changes(original, [row("bob", delete=True)], me="bob")
+    assert any("不能删除当前登录的账号" in e for e in plan.errors), "自己能删自己"
+    plan = us.plan_user_changes(original, [row("bob", status="已禁用")], me="bob")
+    assert any("不能禁用当前登录的账号" in e for e in plan.errors), "自己能禁用自己"
+    plan = us.plan_user_changes(original, [row("bob", roles="user")], me="bob")
+    assert any("不能取消自己的管理员角色" in e for e in plan.errors), "自己能把自己降级"
+    # 别人做同样的事没问题
+    plan = us.plan_user_changes(original, [row("alice", status="已禁用")], me="bob")
+    assert not plan.errors and plan.updates, "禁用他人被误拦"
+
+    # ---- 脏数据 ----
+    plan = us.plan_user_changes(original, [row("ghost")])
+    assert any("不在存储里" in e for e in plan.errors), "网格里的未知账号被静默放过"
+    plan = us.plan_user_changes(original, [row("alice", roles="")])
+    assert any("至少要保留一个角色" in e for e in plan.errors), "空角色被放过"
+    plan = us.plan_user_changes(original, [row("alice"), row("alice")])
+    assert any("出现了不止一次" in e for e in plan.errors), "重复行被放过"
+    plan = us.plan_user_changes(original, [
+        {"删除?": False, "用户名": "alice", "状态": "启用中", "角色": "user",
+         "邮箱": float("nan"), "姓": "Li", "名": "A"}])
+    assert not plan.errors and plan.updates == [("alice", {"email": ""})], \
+        f"NaN 应归一成空串而不是字符串 'nan'：{plan.updates}"
+
+    # 预置账号不进写计划
+    plan = us.plan_user_changes(original, [row("admin")], presets=["admin"])
+    assert any("预置账号" in e for e in plan.errors), "预置账号被当作普通用户改写"
+
+    print("[通过] 网格写计划（字段级 diff / 自我护栏 / NaN 归一 / 预置账号拦截）")
+
+
+def test_readonly_query() -> None:
+    """只读 SQL：SELECT 放行、UPDATE 在数据库层被拒、截断与多语句拦截。"""
+    try:
+        store = us.MySqlUserStore.from_secrets()
+        ok, message = store.ping()
+    except us.StoreConfigError as exc:
+        print(f"[跳过] MySQL 未配置（{exc}）")
+        return
+    if not ok:
+        print(f"[跳过] MySQL 连不上：{message}")
+        return
+
+    # 基本查询
+    columns, rows, truncated, _notes = store.run_readonly_query(
+        "SELECT username FROM users ORDER BY username")
+    assert columns == ["username"], f"列名不对：{columns}"
+
+    # 截断：造 3 个用户，只取 2 行 → truncated 必须为 True
+    names = [f"__selftest_q{i}__" for i in range(3)]
+    for name in names:
+        store.delete_user(name)
+        store.create_user(name, {"password_hash": _hash("Passw0rd!"), "roles": ["user"]})
+    try:
+        columns, rows, truncated, _ = store.run_readonly_query(
+            "SELECT username FROM users ORDER BY username", max_rows=2)
+        assert len(rows) == 2 and truncated, \
+            f"截断标记不对：rows={len(rows)}, truncated={truncated}"
+
+        # 写语句必须在数据库层被拒（不是靠前端字符串检查），且数据原封不动
+        victim = names[0]
+        store.update_user(victim, {"email": "safe@x.com"})
+        for bad_sql in (
+            f"UPDATE users SET email = 'hacked@x.com' WHERE username = '{victim}'",
+            f"DELETE FROM users WHERE username = '{victim}'",
+        ):
+            try:
+                store.run_readonly_query(bad_sql)
+                raise AssertionError(f"写语句竟然执行成功了：{bad_sql[:50]}")
+            except us.QueryError as exc:
+                assert "READ ONLY" in str(exc) or "1792" in str(exc), \
+                    f"被拒原因不是只读事务：{exc}"
+        assert store.get_user(victim)["email"] == "safe@x.com", "数据被只读会话改掉了！"
+
+        # 多语句与空语句在进入数据库前就拦下（友好报错，不必劳烦服务端）
+        for bad_sql in ("SELECT 1; SELECT 2", "   ", ";"):
+            try:
+                store.run_readonly_query(bad_sql)
+                raise AssertionError(f"应被拦下：{bad_sql!r}")
+            except us.QueryError:
+                pass
+
+        # DESCRIBE / SHOW 这类辅助语句也要能用（数据库前端的日常操作）
+        columns, rows, _, _ = store.run_readonly_query("DESCRIBE users")
+        assert columns and rows, "DESCRIBE 无结果"
+    finally:
+        for name in names:
+            store.delete_user(name)
+
+    print("[通过] 只读 SQL（SELECT 放行 / UPDATE·DELETE 服务端拒绝且数据无损 / 截断 / 多语句拦截）")
+
+
 def test_mysql_credentials_integration() -> None:
     """端到端验收：库里的管理员能进管理页、被禁用的账号登不进来。
 
@@ -426,17 +559,19 @@ def test_admin_page_gate() -> None:
 
 
 def main() -> int:
-    print("测试：用户管理系统（存储层双后端 + 凭据合并 + 管理页门禁）\n")
+    print("测试：用户管理系统（存储层双后端 + 凭据合并 + 管理页门禁 + 数据库前端）\n")
     test_json_crud()
     test_json_login_log()
     test_entry_mapping()
     test_password_rules()
     test_credentials_merge_and_disable()
+    test_plan_user_changes()
     test_mysql_roundtrip()
+    test_readonly_query()
     test_mysql_credentials_integration()
     test_mysql_ping_matches_backend()
     test_admin_page_gate()
-    print("\n全部通过：用户管理系统（文件后端 / MySQL 后端 / 凭据合并 / 管理页门禁）")
+    print("\n全部通过：用户管理系统（双后端存储 / 凭据合并 / 数据库前端 / 管理页门禁）")
     return 0
 
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Streamlit 歌手推荐器：什么性格的年轻人喜欢什么样的流行歌手？
 
-八个页面（侧边栏按钮式导航；前七个所有人可见，第八个仅管理员）：
+九个页面（侧边栏按钮式导航；第 1~8 页所有人可见，第 9 页仅管理员）：
 1. 数据总览 —— 项目规模、推荐方式导引、模型成绩单；
 2. 按画像推荐 —— 3 个 K-Means 性格画像，查看各画像的流派与代表歌手；
 3. 按性格标签找歌手 —— 用户自由勾选 37 个性格/生活方式/兴趣标签，
@@ -12,7 +12,9 @@
 6. 描述找歌 —— 用自己的话描述想要的风格（情绪/快慢/乐器感/场景/流派/年代），
    按音频特征检索匹配的歌曲与歌手（基于内容的检索，词典解析、全程可解释）；
 7. 流行度预测器 —— 拖动音频特征滑块，随机森林实时预测流行度。
-8. 用户管理（仅管理员）—— 用户增删改、重置密码、启用/禁用、角色设置、登录日志。
+8. 系统设置 —— 三套主题切换（Cookie 记忆跨会话）、项目信息。
+9. 用户管理（仅管理员）—— 数据库前端：表格里直接改用户、保存同步进库；
+   增删改、重置密码、启用/禁用、角色设置、登录日志、只读 SQL 查询。
 
 数据源：只读取 outputs/tables/ 下已入库的分析结果表（不依赖原始数据），
 因此克隆仓库或部署到 Streamlit Community Cloud 后无需重新跑分析、冷启动即可用。
@@ -26,6 +28,7 @@
 """
 import html
 import json
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -51,7 +54,22 @@ from artist_photo import get_artist_photo
 from glossary import head_kb, kb, kb_row
 import style_search
 import theme
-from user_store import STATUS_ACTIVE, STATUS_DISABLED, fmt_local, get_store, norm_roles
+from user_store import (
+    GRID_ROW_COLUMNS,
+    QUERY_EXAMPLES,
+    ROLE_CHOICES,
+    STATUS_BY_LABEL,
+    STATUS_ACTIVE,
+    STATUS_DISABLED,
+    QueryError,
+    fmt_local,
+    get_store,
+    grid_row,
+    label_to_roles,
+    norm_roles,
+    plan_user_changes,
+    roles_to_label,
+)
 
 # 结果表在打包后位于 _MEIPASS 只读资源目录，源码运行时就是项目根目录
 RESOURCE_DIR, ROOT = resolve_dirs()
@@ -373,23 +391,298 @@ def style_search_page(songs: pd.DataFrame, stats: pd.DataFrame,
                "乐器类描述也是用「原声度/器乐占比」近似的。")
 
 
-# ================================================= 页面8: 用户管理（仅管理员）====
+# ================================================= 页面8: 用户管理（数据库前端）====
+def _flash_and_rerun(text: str) -> None:
+    """操作类消息用「写 session_state → 重跑 → 顶部显示」的闪信模式。
+
+    直接在按钮/表单里 st.success 会被紧接着的 st.rerun() 冲掉，用户根本看不到；
+    存进 session_state，让下一次重跑在页面顶部弹出来。
+    """
+    st.session_state["_admin_flash"] = text
+    st.rerun()
+
+
+def _apply_user_plan(store, plan) -> None:
+    """把写计划逐条执行，每条单独报告成败。
+
+    批量操作最忌两种极端：要么全部静默成功（用户不知道改了什么），
+   要么一条失败就全部回滚（用户不知道哪条出了问题）。这里逐条执行、逐条上报，
+    单条失败不影响其余条目。
+    """
+    done, failed = [], []
+    for username, fields in plan.updates:
+        what = "、".join(fields)
+        try:
+            store.update_user(username, fields)
+            done.append(f"更新「{username}」：{what}")
+        except Exception as exc:  # noqa: BLE001 - 单条失败不影响其余条目
+            failed.append(f"更新「{username}」失败：{exc}")
+    for username in plan.deletes:
+        try:
+            store.delete_user(username)
+            done.append(f"删除「{username}」")
+        except Exception as exc:  # noqa: BLE001
+            failed.append(f"删除「{username}」失败：{exc}")
+
+    if failed:
+        st.error("**部分操作失败（成功的已生效）：**\n\n"
+                 + "\n\n".join(f"- {m}" for m in failed))
+        if done:
+            st.success("已完成：\n\n" + "\n\n".join(f"- {m}" for m in done))
+        return
+    _flash_and_rerun("已同步到数据库：\n\n" + "\n\n".join(f"- {m}" for m in done))
+
+
+def _render_grid_tab(store, records, credentials, preset, me) -> None:
+    """📋 数据表：st.data_editor 行内编辑，保存时批量同步进数据库。
+
+    这是「MySQL 前端」的主体：表格里改单元格、勾选删行、点保存写库。三个取舍：
+    - 预置账号不进可编辑网格（单独只读展示）——它们的事实来源是 secrets.toml，
+      在页面上改了下次加载就被覆盖回去；
+    - 网格不提供加行——新增用户要设密码（必须先 bcrypt 哈希），
+      表格里没有安全的输密码方式，统一走「➕ 新增用户」页；
+    - 搜索框会改变传给编辑器的数据，从而**丢弃未保存的修改**，必须明确告知。
+    """
+    st.caption(
+        "直接点单元格修改，勾选「删除?」标记要删的行，然后点 **💾 保存修改** 一次性写进数据库。"
+        "用户名与时间是只读列；密码不出现在表格里（库里只有 bcrypt 哈希），改密码用「🔑 重置密码」页。"
+        "⚠️ 改动搜索框会丢弃尚未保存的修改。")
+
+    rows = [grid_row(u, records[u]) for u in sorted(records) if u not in preset]
+    grid_df = pd.DataFrame(rows, columns=list(GRID_ROW_COLUMNS))
+
+    keyword = st.text_input("搜索（用户名或邮箱）", key="admin_grid_search").strip()
+    view = grid_df
+    if keyword:
+        mask = (grid_df["用户名"].str.contains(keyword, case=False, regex=False)
+                | grid_df["邮箱"].fillna("").astype(str)
+                    .str.contains(keyword, case=False, regex=False))
+        view = grid_df[mask]
+
+    edited = st.data_editor(
+        view,
+        key="admin_grid",
+        num_rows="fixed",
+        width="stretch",
+        hide_index=True,
+        height=min(420, 35 * len(view) + 38),
+        disabled=["用户名", "创建时间", "最后登录"],
+        column_config={
+            "删除?": st.column_config.CheckboxColumn(
+                "删除?", default=False, help="勾选后还要点「💾 保存修改」才会真的删除"),
+            "用户名": st.column_config.TextColumn("用户名", help="主键，不可修改"),
+            "状态": st.column_config.SelectboxColumn(
+                "状态", options=list(STATUS_BY_LABEL), required=True,
+                help="已禁用的账号登录不进来，但数据还在，随时可恢复"),
+            "角色": st.column_config.SelectboxColumn(
+                "角色", options=list(ROLE_CHOICES), required=True,
+                help="admin 可进本页；user 只能用其余页面"),
+            "邮箱": st.column_config.TextColumn("邮箱"),
+            "姓": st.column_config.TextColumn("姓"),
+            "名": st.column_config.TextColumn("名"),
+            "创建时间": st.column_config.TextColumn("创建时间"),
+            "最后登录": st.column_config.TextColumn("最后登录"),
+        },
+    )
+    # 空单元格可能以 NaN 回来：归一成空串/False，写计划只认干净类型
+    # （不归一的话 str(nan) 会变成字符串 "nan"，把邮箱悄悄改坏）
+    for col in ("用户名", "状态", "角色", "邮箱", "姓", "名"):
+        edited[col] = edited[col].fillna("").astype(str)
+    edited["删除?"] = edited["删除?"].fillna(False).astype(bool)
+
+    plan = plan_user_changes(records, edited.to_dict("records"), me=me, presets=preset)
+    if plan.errors:
+        st.error("**先解决这些问题（有错误时不执行任何写库）：**\n\n"
+                 + "\n\n".join(f"- {m}" for m in plan.errors))
+    if plan.has_changes:
+        st.info(f"待保存：**{len(plan.updates)}** 处修改、**{len(plan.deletes)}** 处删除")
+        if st.button("💾 保存修改（写进数据库）", type="primary",
+                     disabled=bool(plan.errors), key="admin_grid_save"):
+            _apply_user_plan(store, plan)
+    else:
+        st.caption("没有检测到修改。")
+
+    if preset:
+        st.divider()
+        st.subheader("预置账号（只读）")
+        preset_rows = []
+        for username in sorted(preset):
+            entry = (credentials.get("usernames") or {}).get(username) or {}
+            preset_rows.append({
+                "用户名": username,
+                "状态": "启用中（secrets 预置，不受禁用影响）",
+                "角色": roles_to_label(entry.get("roles")) or "—",
+                "邮箱": entry.get("email") or "—",
+                "姓名": f"{entry.get('last_name', '')}{entry.get('first_name', '')}".strip() or "—",
+            })
+        st.dataframe(pd.DataFrame(preset_rows), width="stretch", hide_index=True,
+                     height=min(200, 35 * len(preset_rows) + 38))
+        st.caption("来自 `.streamlit/secrets.toml`：页面上改了下次加载也会被 secrets 覆盖，"
+                   "所以整块只读。它们同时是 MySQL 连不上时的登录兜底，"
+                   "要改密码/邮箱请直接改 secrets.toml。")
+
+
+def _render_create_tab(store) -> None:
+    """➕ 新增用户：保留表单而不是在网格里加行——密码必须先 bcrypt 哈希。"""
+    with st.form("admin_create_user", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        new_username = c1.text_input("用户名", help="1~20 位字母、数字、下划线或连字符，不支持中文")
+        new_email = c2.text_input("邮箱（可留空）")
+        c3, c4 = st.columns(2)
+        new_last = c3.text_input("姓（可留空）")
+        new_first = c4.text_input("名（可留空）")
+        new_password = st.text_input("密码", type="password", help=PASSWORD_HINT_CN)
+        new_roles = st.multiselect("角色", [ADMIN_ROLE, "user"], default=["user"],
+                                   help="admin 可进「👤 用户管理」；user 只能用其余页面")
+        if st.form_submit_button("创建用户", type="primary"):
+            problem = username_problem(new_username) or password_problem(new_password)
+            if problem:
+                st.error(problem)
+            elif not new_roles:
+                st.error("至少选一个角色")
+            else:
+                try:
+                    store.create_user(new_username, {
+                        "email": new_email,
+                        "first_name": new_first,
+                        "last_name": new_last,
+                        "password_hash": hash_password(new_password),
+                        "roles": new_roles,
+                        "status": STATUS_ACTIVE,
+                    })
+                    _flash_and_rerun(f"已创建用户「{new_username}」，可在「📋 数据表」里继续维护")
+                except Exception as exc:  # noqa: BLE001 - 重名、库不可用等
+                    st.error(f"创建失败：{exc}")
+    st.caption("为什么不在「📋 数据表」里直接加行：密码必须先 bcrypt 哈希再入库，"
+               "表格里没有安全的输密码方式；这个表单同时做用户名/密码规则校验。")
+
+
+def _render_reset_pwd_tab(store, records, preset) -> None:
+    """🔑 重置密码：只对存储层里的账号开放。
+
+    预置账号不在下拉里：它们的密码事实来源是 secrets.toml，就算改了库里的哈希，
+    登录时 secrets 里的同名账号优先、改了也不生效——不如直接不让改，免得给人
+    "已经改成功了" 的假象。
+    """
+    manageable = sorted(u for u in records if u not in preset)
+    if not manageable:
+        st.caption("存储里还没有可管理的账号（预置账号的密码在 secrets.toml 里）。")
+        return
+    target = st.selectbox("选择用户", manageable, key="admin_reset_target")
+    with st.form("admin_reset_pwd", clear_on_submit=True):
+        pwd = st.text_input("新密码", type="password", help=PASSWORD_HINT_CN)
+        pwd2 = st.text_input("再输一次", type="password")
+        if st.form_submit_button("重置密码", type="primary"):
+            problem = password_problem(pwd)
+            if problem:
+                st.error(problem)
+            elif pwd != pwd2:
+                st.error("两次输入的密码不一致")
+            else:
+                try:
+                    store.set_password(target, hash_password(pwd))
+                    _flash_and_rerun(f"已重置「{target}」的密码")
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"重置失败：{exc}")
+    st.caption("密码只存 bcrypt 哈希，页面上无法查看原密码——忘记就只能重置。")
+
+
+def _render_log_tab(store) -> None:
+    """🧾 登录日志：只读视图 + 筛选（清理日志属于写操作，交给 SQL 查询页并受只读约束外的方式处理）。"""
+    limit = st.selectbox("条数", [100, 200, 500], index=1, key="admin_log_limit")
+    try:
+        logs = store.list_login_logs(limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        logs = []
+        st.error(f"读取登录日志失败：{exc}")
+    if not logs:
+        st.caption("暂无登录记录。")
+        return
+
+    keyword = st.text_input("按用户名筛选", key="admin_log_search").strip()
+    if keyword:
+        logs = [r for r in logs if keyword.lower() in (r["username"] or "").lower()]
+
+    log_df = pd.DataFrame([{
+        "时间": fmt_local(row["login_at"]),
+        "用户名": row["username"],
+        "结果": "成功" if row["success"] else "失败",
+        "IP": row["ip"],
+    } for row in logs])
+    st.dataframe(log_df, width="stretch", hide_index=True,
+                 height=min(480, 35 * len(log_df) + 38))
+    st.caption(f"最近 {limit} 条，时间按本机时区显示（存储里是 UTC）。"
+               "登录失败时认证库不记录用户输入的用户名，只有「账号确实存在、"
+               "只是密码错」这种情况能还原出来，其余如实记为「（未知用户）」。")
+
+
+def _sql_example(text: str):
+    """示例按钮的回调：在重跑开始时把示例写进输入框的 session key。"""
+    def _cb() -> None:
+        st.session_state["admin_sql"] = text
+    return _cb
+
+
+def _render_sql_tab(store) -> None:
+    """🧪 SQL 查询：数据库前端标志性功能，但会话被**数据库层**强制只读。
+
+    只读的保证在服务端（SET SESSION TRANSACTION READ ONLY），
+    不在前端的字符串检查——细节见 user_store.run_readonly_query 的注释。
+    """
+    if not store.supports_sql:
+        st.info("当前是文件后端（data/users.json），没有 SQL 引擎可查。"
+                '把 secrets 里的 [storage] backend 改成 "mysql" 并重启后，'
+                "这里就是真正的查询入口。")
+        return
+
+    st.caption("在只读会话里执行 SELECT，结果直接来自 MySQL；"
+               "写语句（UPDATE / DELETE / DROP…）会被数据库在**服务端**拒绝，"
+               "不是靠本页的字符串检查。想改数据请回「📋 数据表」，那里有校验和护栏。")
+    cols = st.columns(len(QUERY_EXAMPLES))
+    for col, (label, text) in zip(cols, QUERY_EXAMPLES.items()):
+        col.button(label, key=f"admin_sql_ex_{label}", on_click=_sql_example(text))
+
+    sql = st.text_area("SQL（只读）", height=140, key="admin_sql",
+                       placeholder="SELECT * FROM users ORDER BY username")
+    if not st.button("▶️ 执行查询", type="primary", key="admin_sql_run"):
+        return
+
+    started = time.perf_counter()
+    try:
+        columns, rows, truncated, notes = store.run_readonly_query(sql)
+    except QueryError as exc:
+        st.error(f"查询失败：{exc}")
+        return
+    elapsed = time.perf_counter() - started
+
+    if rows:
+        st.dataframe(pd.DataFrame(rows, columns=columns), width="stretch",
+                     hide_index=True, height=min(480, 35 * len(rows) + 38))
+    elif columns:
+        st.caption("执行成功，0 行结果。")
+    summary = f"**{len(rows)}** 行 · 耗时 {elapsed:.2f} 秒"
+    if truncated:
+        summary += " · 结果超过单次显示上限已截断，请加 LIMIT 看更多"
+    for note in notes:
+        summary += f"\n\n> {note}"
+    st.caption(summary)
+
+
 def render_user_admin() -> None:
-    """用户管理页：列表、新增、重置密码、启用/禁用、角色、资料、删除、登录日志。
+    """用户管理页：数据库前端——表格直接改、保存同步进库，附登录日志与只读 SQL。
 
     仅管理员可见——侧边栏不显示按钮，页面8 里还会再判一次（只藏按钮不算权限控制）。
-    预置账号（secrets 里的）在列表里标出来但不可修改：它们的事实来源是
-    secrets.toml，在页面上改了下次加载就被覆盖回去，不如直接说明不能改。
+    五个标签页：📋 数据表（行内编辑 + 批量写库）/ ➕ 新增用户 / 🔑 重置密码 /
+    🧾 登录日志 / 🧪 SQL 查询（只读会话）。
     """
     store = get_store()
     me = st.session_state.get("username")
 
     st.title("👤 用户管理")
     backend_desc = "MySQL 数据库" if store.backend == "mysql" else "data/users.json（文件）"
-    st.caption(f"存储后端：**{store.source_label}** · {backend_desc}")
+    st.caption(f"存储后端：**{store.source_label}** · {backend_desc}"
+               "　——　这里就是数据库的前端：改表格 → 保存 → 写进库")
 
-    # 操作类消息用「写入 session_state → 重跑 → 在顶部显示」的闪信模式：
-    # 直接在表单里 st.success 会被紧接着的 st.rerun() 冲掉，用户看不到。
     flash = st.session_state.pop("_admin_flash", None)
     if flash:
         st.success(flash)
@@ -410,192 +703,23 @@ def render_user_admin() -> None:
     credentials, _ = load_credentials()
     preset = set(preset_usernames())
 
-    def _flash_and_rerun(text: str) -> None:
-        st.session_state["_admin_flash"] = text
-        st.rerun()
-
-    # ---------------------------------------------------------- 用户列表 ----
-    st.subheader("用户列表")
-    rows = []
-    for username, record in records.items():
-        rows.append({
-            "用户名": username,
-            "来源": "预置（secrets）" if username in preset else store.source_label,
-            "状态": "已禁用" if record.get("status") == STATUS_DISABLED else "启用中",
-            "角色": "、".join(record.get("roles") or []) or "—",
-            "邮箱": record.get("email") or "—",
-            "姓名": f"{record.get('last_name', '')}{record.get('first_name', '')}".strip() or "—",
-            "创建时间": fmt_local(record.get("created_at")),
-            "最后登录": fmt_local(record.get("last_login_at")),
-        })
-    # 预置账号若不在存储里也要列出来——它是登录兜底，看不见才危险
-    for username in sorted(preset - set(records)):
-        entry = (credentials.get("usernames") or {}).get(username) or {}
-        rows.append({
-            "用户名": username,
-            "来源": "预置（secrets）",
-            "状态": "启用中",
-            "角色": "、".join(norm_roles(entry.get("roles"))) or "—",
-            "邮箱": entry.get("email") or "—",
-            "姓名": f"{entry.get('last_name', '')}{entry.get('first_name', '')}".strip() or "—",
-            "创建时间": "—",
-            "最后登录": "—",
-        })
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True,
-                 height=min(420, 35 * len(rows) + 38))
-    st.caption("「预置（secrets）」的账号来自 `.streamlit/secrets.toml`，页面不可修改"
-               "（改了下次加载会被 secrets 覆盖）；它们同时也是 MySQL 挂掉时的登录兜底。")
-
-    # ---------------------------------------------------------- 新增用户 ----
-    st.divider()
-    st.subheader("新增用户")
-    with st.form("admin_create_user", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        new_username = c1.text_input("用户名", help="1~20 位字母、数字、下划线或连字符，不支持中文")
-        new_email = c2.text_input("邮箱（可留空）")
-        c3, c4 = st.columns(2)
-        new_last = c3.text_input("姓（可留空）")
-        new_first = c4.text_input("名（可留空）")
-        new_password = st.text_input("密码", type="password", help=PASSWORD_HINT_CN)
-        new_roles = st.multiselect("角色", [ADMIN_ROLE, "user"], default=["user"],
-                                   help="admin 可进入本页；user 只能用其余七个页面")
-        if st.form_submit_button("创建用户", type="primary"):
-            problem = username_problem(new_username) or password_problem(new_password)
-            if problem:
-                st.error(problem)
-            elif not new_roles:
-                st.error("至少选一个角色")
-            else:
-                try:
-                    store.create_user(new_username, {
-                        "email": new_email,
-                        "first_name": new_first,
-                        "last_name": new_last,
-                        "password_hash": hash_password(new_password),
-                        "roles": new_roles,
-                        "status": STATUS_ACTIVE,
-                    })
-                    _flash_and_rerun(f"已创建用户「{new_username}」")
-                except Exception as exc:  # noqa: BLE001 - 重名、库不可用等
-                    st.error(f"创建失败：{exc}")
-
-    # ------------------------------------------------------ 管理已有用户 ----
-    st.divider()
-    st.subheader("管理已有用户")
-    editable = sorted(u for u in records if u not in preset)
-    if not editable:
-        st.caption("存储里还没有可管理的用户（预置账号的事实来源是 secrets.toml，页面不可改）。")
-    else:
-        target = st.selectbox("选择用户", editable, key="admin_target")
-        record = records[target]
-        is_self = target == me
-        state = "已禁用" if record.get("status") == STATUS_DISABLED else "启用中"
-        st.caption(f"`{target}` · {state} · 角色：{'、'.join(record.get('roles') or []) or '无'}"
-                   + ("　←　这是你当前登录的账号，不能禁用或删除" if is_self else ""))
-
-        tab_pwd, tab_role, tab_info, tab_danger = st.tabs(
-            ["重置密码", "角色与状态", "修改资料", "删除账号"])
-
-        with tab_pwd:
-            with st.form("admin_reset_pwd", clear_on_submit=True):
-                pwd = st.text_input("新密码", type="password", help=PASSWORD_HINT_CN)
-                pwd2 = st.text_input("再输一次", type="password")
-                if st.form_submit_button("重置密码", type="primary"):
-                    problem = password_problem(pwd)
-                    if problem:
-                        st.error(problem)
-                    elif pwd != pwd2:
-                        st.error("两次输入的密码不一致")
-                    else:
-                        try:
-                            store.set_password(target, hash_password(pwd))
-                            _flash_and_rerun(f"已重置「{target}」的密码")
-                        except Exception as exc:  # noqa: BLE001
-                            st.error(f"重置失败：{exc}")
-            st.caption("密码只存 bcrypt 哈希，页面上无法查看原密码——忘记就只能重置。")
-
-        with tab_role:
-            with st.form("admin_set_role"):
-                roles = st.multiselect("角色", [ADMIN_ROLE, "user"],
-                                       default=record.get("roles") or ["user"])
-                if st.form_submit_button("保存角色", type="primary"):
-                    if not roles:
-                        st.error("至少保留一个角色")
-                    elif is_self and ADMIN_ROLE not in roles:
-                        # 自保：取消自己的管理员角色 = 把自己锁在管理页外面
-                        st.error("不能取消自己的管理员角色（否则你将无法再进入本页）")
-                    else:
-                        try:
-                            store.set_roles(target, roles)
-                            _flash_and_rerun(f"已更新「{target}」的角色")
-                        except Exception as exc:  # noqa: BLE001
-                            st.error(f"保存失败：{exc}")
-
-            disabled = record.get("status") == STATUS_DISABLED
-            label = "✅ 启用该账号" if disabled else "🚫 禁用该账号"
-            if st.button(label, key="admin_toggle_status",
-                         disabled=is_self, help="不能禁用当前登录的账号" if is_self else None):
-                try:
-                    store.set_status(target, STATUS_ACTIVE if disabled else STATUS_DISABLED)
-                    _flash_and_rerun(f"已{'启用' if disabled else '禁用'}「{target}」")
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"操作失败：{exc}")
-            st.caption("禁用不是删除：账号与密码都还在，只是登录时被过滤掉、登不进来，"
-                       "随时可以再启用。")
-
-        with tab_info:
-            with st.form("admin_edit_info"):
-                email = st.text_input("邮箱", value=record.get("email") or "")
-                last_name = st.text_input("姓", value=record.get("last_name") or "")
-                first_name = st.text_input("名", value=record.get("first_name") or "")
-                if st.form_submit_button("保存资料", type="primary"):
-                    try:
-                        store.update_user(target, {
-                            "email": email, "first_name": first_name, "last_name": last_name,
-                        })
-                        _flash_and_rerun(f"已更新「{target}」的资料")
-                    except Exception as exc:  # noqa: BLE001
-                        st.error(f"保存失败：{exc}")
-
-        with tab_danger:
-            st.warning("删除是**不可恢复**的：账号与密码哈希都会从存储里移除。"
-                       "如果只是想暂时不让登录，请用「角色与状态」里的禁用。")
-            confirm = st.checkbox(f"我确认要永久删除「{target}」", key="admin_confirm_del")
-            if st.button("删除账号", type="primary", disabled=is_self or not confirm,
-                         key="admin_delete", help="不能删除当前登录的账号" if is_self else None):
-                try:
-                    store.delete_user(target)
-                    _flash_and_rerun(f"已删除用户「{target}」")
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"删除失败：{exc}")
-
-    # ---------------------------------------------------------- 登录日志 ----
-    st.divider()
-    st.subheader("登录日志")
-    try:
-        logs = store.list_login_logs(limit=200)
-    except Exception as exc:  # noqa: BLE001
-        logs = []
-        st.error(f"读取登录日志失败：{exc}")
-    if logs:
-        log_df = pd.DataFrame([{
-            "时间": fmt_local(row["login_at"]),
-            "用户名": row["username"],
-            "结果": "成功" if row["success"] else "失败",
-            "IP": row["ip"],
-        } for row in logs])
-        st.dataframe(log_df, width="stretch", hide_index=True,
-                     height=min(420, 35 * len(log_df) + 38))
-        st.caption("最多显示最近 200 条，时间按本机时区显示（存储里是 UTC）。"
-                   "登录失败时认证库不记录用户输入的用户名，只有「账号确实存在、"
-                   "只是密码错」这种情况能还原出来，其余如实记为「（未知用户）」。")
-    else:
-        st.caption("暂无登录记录。")
-
+    tab_grid, tab_new, tab_pwd, tab_log, tab_sql = st.tabs(
+        ["📋 数据表", "➕ 新增用户", "🔑 重置密码", "🧾 登录日志", "🧪 SQL 查询"])
+    with tab_grid:
+        _render_grid_tab(store, records, credentials, preset, me)
+    with tab_new:
+        _render_create_tab(store)
+    with tab_pwd:
+        _render_reset_pwd_tab(store, records, preset)
+    with tab_log:
+        _render_log_tab(store)
+    with tab_sql:
+        _render_sql_tab(store)
 
 # ---------------------------------------------------------------- 侧边栏 ----
 PAGES = ["📊 数据总览", "🎧 按画像推荐", "🏷️ 按性格标签找歌手",
-         "📝 性格小测评", "🔍 歌手查询", "💬 描述找歌", "🎚️ 流行度预测器"]
+         "📝 性格小测评", "🔍 歌手查询", "💬 描述找歌", "🎚️ 流行度预测器",
+         "⚙️ 系统设置"]
 ADMIN_PAGE = "👤 用户管理"
 
 # 管理页只对管理员可见。注意这里只决定「显不显示按钮」，
@@ -660,12 +784,8 @@ with st.sidebar:
     else:
         st.caption("离线 HTML 版未打包：源码运行时执行 src/07_build_report.py 生成")
 
-    # ---- 主题风格切换（D35）：pills 即改即生效，选择写 Cookie 跨会话记住 ----
-    st.divider()
-    st.markdown("**🎨 主题风格**")
-    st.pills("主题风格", options=theme.labels(), key=theme.STATE_KEY,
-             label_visibility="collapsed")
-    theme.persist_cookie_js()
+    # 主题切换器已迁入「⚙️ 系统设置」页（D36），侧边栏底部不再放；
+    # Cookie 写入逻辑（persist_cookie_js）随之只在该页触发
 
 # ============================================================ 页面0: 总览 ====
 if page == "📊 数据总览":
@@ -1307,3 +1427,25 @@ elif page == ADMIN_PAGE:
         st.error("用户管理仅对管理员开放。")
         st.stop()
     render_user_admin()
+
+# ============================================================ 页面9: 系统设置 ====
+elif page == "⚙️ 系统设置":
+    st.title("⚙️ 系统设置")
+    st.caption("界面偏好与项目信息。设置保存在本浏览器里（Cookie），换浏览器或电脑需重新选。")
+
+    # ---- 主题风格（D36 自 D35 迁入）：pills 即改即生效，选择写 Cookie 跨会话记住 ----
+    st.subheader("🎨 主题风格")
+    st.caption("点一下立即换肤；登录页也会跟随你上次选的主题。")
+    theme.render_switcher()
+
+    st.divider()
+    st.subheader("ℹ️ 关于本应用")
+    st.markdown(
+        "**性格 × 流行歌手推荐器** —— 用真实问卷与歌曲数据回答"
+        "「什么性格的年轻人喜欢什么样的流行歌手」。\n\n"
+        "- 数据规模：1010 名 15~30 岁受访者 · 28356 首 Spotify 歌曲（去重后）"
+        "· 3 个性格画像 · 37 个推荐标签\n"
+        "- 分析链路：清洗 → 聚类 → 分类 → 回归 → 画像×流派映射 → 四种推荐方式\n"
+        "- 界面：8 个功能页 + 本设置页，三套可切换主题（霓虹夜曲 / 科技蓝 / 赛博紫）"
+    )
+    st.link_button("🔎 在 GitHub 查看完整代码与报告", _repo, icon="🔗")

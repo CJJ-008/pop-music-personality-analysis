@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import sys
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -92,6 +93,164 @@ class StoreConfigError(RuntimeError):
 
 class StoreUnavailableError(RuntimeError):
     """MySQL 连不上（服务没开、密码错、库不存在等）。"""
+
+
+class QueryError(RuntimeError):
+    """SQL 查询出错（语法错、被只读会话拒绝等）。原样携带数据库的报错信息。"""
+
+
+# --------------------------------------------------- 数据表前端（网格口径）--
+
+ROLE_ADMIN = "admin"
+ROLE_USER = "user"
+# 网格里的角色只提供这几个组合：它们是仅有的有意义取值。
+# 用下拉而不是自由文本，就不会出现 "adimn" 这种手滑打错的角色名
+# ——打错的角色名不会报错，只会让权限判断静默失效。
+ROLE_CHOICES = (ROLE_USER, ROLE_ADMIN, f"{ROLE_ADMIN}, {ROLE_USER}")
+
+STATUS_LABELS = {STATUS_ACTIVE: "启用中", STATUS_DISABLED: "已禁用"}
+STATUS_BY_LABEL = {label: value for value, label in STATUS_LABELS.items()}
+
+# st.data_editor 网格的列。定义在这里而不是 app.py，因为「网格长什么样」
+# 是前端与数据库之间的契约：写计划（plan_user_changes）要按它解析。
+GRID_ROW_COLUMNS = ("删除?", "用户名", "状态", "角色", "邮箱", "姓", "名",
+                    "创建时间", "最后登录")
+
+# 查询页的示例按钮（点一下填入输入框）。刻意全写成只读语句——
+# 会话虽然已被数据库强制只读，示例本身也该给出正确示范；
+# 时间条件用 UTC_TIMESTAMP() 对齐库里的 UTC 存储口径。
+QUERY_EXAMPLES = {
+    "用户表": "SELECT * FROM users ORDER BY username",
+    "登录日志": "SELECT * FROM login_log ORDER BY login_at DESC LIMIT 20",
+    "最近 7 天登录统计":
+        "SELECT username, COUNT(*) AS 登录次数, SUM(success) AS 成功次数 "
+        "FROM login_log "
+        "WHERE login_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 7 DAY) "
+        "GROUP BY username ORDER BY 登录次数 DESC",
+    "表结构": "DESCRIBE users",
+}
+
+
+def _clean_text(value) -> str:
+    """None / NaN 一律归一成空串。
+
+    NaN 检查用「自反不等」（NaN != NaN 为真），不用为这一个判断引入 pandas。
+    不归一的话 str(nan) 会得到字符串 "nan"，把用户的邮箱悄悄改成 "nan"。
+    """
+    if value is None or (isinstance(value, float) and value != value):
+        return ""
+    return str(value).strip()
+
+
+def roles_to_label(roles) -> str:
+    """角色列表 → 网格里的显示文本（"admin, user"）。"""
+    return ", ".join(norm_roles(roles))
+
+
+def label_to_roles(label) -> list[str]:
+    """网格里的显示文本 → 角色列表。"""
+    return [r.strip() for r in _clean_text(label).split(",") if r.strip()]
+
+
+def grid_row(username: str, record: dict) -> dict:
+    """存储记录 → 网格行（中文列名，与 GRID_ROW_COLUMNS 一一对应）。"""
+    return {
+        "删除?": False,
+        "用户名": username,
+        "状态": STATUS_LABELS.get(record.get("status") or STATUS_ACTIVE, "启用中"),
+        "角色": roles_to_label(record.get("roles")),
+        "邮箱": record.get("email") or "",
+        "姓": record.get("last_name") or "",
+        "名": record.get("first_name") or "",
+        "创建时间": fmt_local(record.get("created_at")),
+        "最后登录": fmt_local(record.get("last_login_at")),
+    }
+
+
+@dataclass
+class UserChangePlan:
+    """网格改动翻译成数据库动作的结果。errors 非空时一件都不该执行。"""
+
+    updates: list = field(default_factory=list)   # [(用户名, 待写字段 dict)]
+    deletes: list = field(default_factory=list)   # [用户名]
+    errors: list = field(default_factory=list)    # [原因]，一条一行给页面显示
+
+    @property
+    def has_changes(self) -> bool:
+        return bool(self.updates or self.deletes)
+
+
+def plan_user_changes(original: dict[str, dict], edited_rows, *,
+                      me: str | None = None, presets=()) -> UserChangePlan:
+    """对比「网格改出来的行」和「存储里的现状」，产出该执行的写库计划。
+
+    为什么不把网格整个写回去：
+    - 网格里混着只读展示列（创建时间等），用户通常也只改了一两格，
+      逐字段比对后才写，不把没变的数据发一遍；
+    - 更重要的是「不能删自己」「不能把自己降级/禁用」这类护栏必须集中在
+      **数据库动作之前**拦下——带着错误写库再回滚，不如根本不发这条 SQL。
+    """
+    plan = UserChangePlan()
+    preset_set = set(presets or ())
+    seen: set[str] = set()
+
+    for row in edited_rows:
+        username = _clean_text(row.get("用户名"))
+        if not username:
+            plan.errors.append("网格里有一行没有用户名，无法处理")
+            continue
+        if username in seen:
+            plan.errors.append(f"「{username}」在网格里出现了不止一次")
+            continue
+        seen.add(username)
+
+        if username in preset_set:
+            plan.errors.append(f"「{username}」是 secrets 预置账号，页面改不了"
+                               "（改了下次加载也会被 secrets 覆盖回去）")
+            continue
+        if username not in original:
+            plan.errors.append(f"「{username}」不在存储里（可能刚被删除），请刷新页面")
+            continue
+
+        # 勾了删除就只删不改——同时改了字段也没有意义
+        if row.get("删除?") is True or row.get("删除?") == "True":
+            if username == me:
+                plan.errors.append("不能删除当前登录的账号")
+            else:
+                plan.deletes.append(username)
+            continue
+
+        record = original[username]
+        fields: dict = {}
+        for grid_col, db_col in (("邮箱", "email"), ("姓", "last_name"), ("名", "first_name")):
+            value = _clean_text(row.get(grid_col))
+            if value != (record.get(db_col) or ""):
+                fields[db_col] = value
+
+        status = STATUS_BY_LABEL.get(_clean_text(row.get("状态")))
+        if status is None:
+            plan.errors.append(f"「{username}」的状态取值不认识：{row.get('状态')!r}")
+            continue
+        if status != (record.get("status") or STATUS_ACTIVE):
+            if username == me and status == STATUS_DISABLED:
+                plan.errors.append("不能禁用当前登录的账号")
+                continue
+            fields["status"] = status
+
+        roles = label_to_roles(row.get("角色"))
+        if not roles:
+            plan.errors.append(f"「{username}」至少要保留一个角色")
+            continue
+        if sorted(roles) != sorted(norm_roles(record.get("roles"))):
+            if username == me and ROLE_ADMIN not in roles:
+                plan.errors.append("不能取消自己的管理员角色（否则你将无法再进入本页）")
+                continue
+            fields["roles"] = roles
+
+        if fields:
+            plan.updates.append((username, fields))
+
+    return plan
 
 
 # ------------------------------------------------------------------ 路径与时间 --
@@ -230,6 +389,7 @@ class JsonUserStore:
 
     backend = "json"
     source_label = "文件"
+    supports_sql = False
     note: str | None = None
 
     def __init__(self, users_file: Path | None = None, log_file: Path | None = None) -> None:
@@ -367,6 +527,12 @@ class JsonUserStore:
     def ping(self) -> tuple[bool, str]:
         return True, f"文件存储可用（{self.users_file}）"
 
+    def run_readonly_query(self, sql: str, max_rows: int = 500):
+        """文件后端没有 SQL 引擎，查询页用它给出明确解释而不是报错。"""
+        raise QueryError(
+            "当前是文件后端（data/users.json），没有 SQL 可执行；"
+            '把 secrets 里的 [storage] backend 改成 "mysql" 后，查询页才可用')
+
 
 # ------------------------------------------------------------------ MySQL 后端 --
 
@@ -381,6 +547,7 @@ class MySqlUserStore:
 
     backend = "mysql"
     source_label = "数据库"
+    supports_sql = True
     note: str | None = None
 
     def __init__(self, params: dict) -> None:
@@ -587,6 +754,47 @@ class MySqlUserStore:
             return False, str(exc)
         except Exception as exc:  # noqa: BLE001 - 表不存在等
             return False, str(exc)
+
+    def run_readonly_query(self, sql: str, max_rows: int = 500):
+        """在**只读会话**里执行一条查询，返回 (列名, 行, 是否截断, 提示)。
+
+        只读不靠前端的字符串检查——那种检查只拦得住君子，拦不住拼错的关键字。
+        真正的保证来自 SET SESSION TRANSACTION READ ONLY：这条连接里就算
+        写出 UPDATE / DELETE / DROP TABLE，MySQL 也会在**服务端**直接拒绝，
+        数据库层面没有可乘之机。前端的"必须 SELECT 开头"检查只负责
+        给出友好的提前报错，不是安全边界。
+
+        max_rows 限制返回行数：管理员随手写个无 LIMIT 的大查询，
+        不能把 Streamlit 的页面撑爆。
+        """
+        text = (sql or "").strip().rstrip(";").strip()
+        if not text:
+            raise QueryError("查询语句为空")
+        if ";" in text:
+            raise QueryError("一次只允许执行一条语句：去掉多余的分号，或拆开逐条执行")
+
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SET SESSION TRANSACTION READ ONLY")
+                notes: list[str] = []
+                try:
+                    cur.execute("SET SESSION max_execution_time = 5000")
+                    notes.append("查询超过 5 秒会被数据库主动终止")
+                except Exception:  # noqa: BLE001 - 老版本没有这个变量
+                    notes.append("当前 MySQL 不支持查询超时设置，大表请手动加 LIMIT")
+
+                try:
+                    cur.execute(text)
+                except Exception as exc:  # noqa: BLE001 - 语法错/表名错等，原样给页面
+                    raise QueryError(str(exc)) from exc
+
+                if cur.description is None:
+                    # 只读会话里写语句到不了这里（服务端已拒绝），防御性兜底
+                    return [], [], False, notes
+                columns = [d[0] for d in cur.description]
+                rows = cur.fetchmany(max_rows)
+                truncated = cur.fetchone() is not None
+                return columns, rows, truncated, notes
 
 
 # --------------------------------------------------------------------- 工厂 --

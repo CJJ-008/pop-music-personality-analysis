@@ -11,13 +11,14 @@ GitHub 单文件 100MB 限制，不能也不应提交进仓库。
 from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
 datas = [
-    # 应用本体与认证/问号弹窗/歌手照片/描述找歌/用户存储模块：streamlit 运行时以脚本方式执行 app.py，故作为数据文件携带
+    # 应用本体与认证/问号弹窗/歌手照片/描述找歌/用户存储/主题模块：streamlit 运行时以脚本方式执行 app.py，故作为数据文件携带
     ("app.py", "."),
     ("auth.py", "."),
     ("user_store.py", "."),
     ("glossary.py", "."),
     ("artist_photo.py", "."),
     ("style_search.py", "."),
+    ("theme.py", "."),
     # 仪表盘唯一的数据源：分析结果表
     ("outputs/tables", "outputs/tables"),
     # 流行度预测模型（预测器页用）
@@ -48,6 +49,7 @@ a = Analysis(
         "glossary",
         "artist_photo",
         "style_search",
+        "theme",
         # Spotify 官方 API 客户端（artist_photo.py 用，requests 随 streamlit 依赖树进包）
         "requests",
         # MySQL 驱动：只在 user_store.py 的函数体里延迟 import，而 user_store.py 本身

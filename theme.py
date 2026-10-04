@@ -96,11 +96,32 @@ def current_preset() -> dict:
 def init_session() -> None:
     """登录后调用一次：把 Cookie 里记住的主题播种进 session_state。
 
-    只在键不存在时播种（不覆盖用户本次会话里的实时切换）；
-    播种成 label 而非 id，这样侧边栏 pills 的初始选中项直接对得上。
+    STATE_KEY 是普通 session_state 键（不是组件 key），不会被 Streamlit 的
+    「组件未渲染即清理」机制删掉；播种成 label 而非 id，便于直接与 pills 选项比对。
     """
     if STATE_KEY not in st.session_state:
         st.session_state[STATE_KEY] = current_preset()["label"]
+
+
+def render_switcher() -> None:
+    """渲染主题切换 pills（D36：只在「系统设置」页调用）并处理选择。
+
+    不能给 pills 绑 key=STATE_KEY：带组件 key 的组件在「某次运行没渲染」时
+    会被 Streamlit 自动清掉 session_state——切换器只在一个页面渲染，
+    从别的页面回来时选择必然丢失（D36 实测踩坑）。因此这里不带 key：
+    每次用「当前主题」作 default 渲染，用户改选后把新值写进普通
+    session_state 并同步 Cookie。
+    """
+    current = current_preset()["label"]
+    choice = st.pills(
+        "主题风格",
+        options=labels(),
+        default=current,
+        label_visibility="collapsed",
+    )
+    if choice and choice != st.session_state.get(STATE_KEY):
+        st.session_state[STATE_KEY] = choice
+    persist_cookie_js()
 
 
 def persist_cookie_js() -> None:

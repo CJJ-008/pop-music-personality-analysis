@@ -78,6 +78,16 @@ def main() -> None:
         "--server.fileWatcherType=none",  # 打包环境无源码变化可监听，禁用监视器
         "--server.headless=true",
         "--global.developmentMode=false",
+        # 主题基调直传 CLI（与源码运行的 .streamlit/config.toml 保持一致，D34/D35）：
+        # Streamlit 只读 cwd 的 .streamlit/config.toml，而 exe 解包出来的资源目录
+        # 不在查找路径上，若依赖外部文件就等于要求用户必须在 exe 旁放一份配置；
+        # CLI 直传让 exe 单文件即有正确的暗色基调。换肤由 theme.py 的
+        # 运行时 CSS 覆盖层负责，这里只是基线。
+        "--theme.base=dark",
+        "--theme.primaryColor=#ff4b4b",
+        "--theme.backgroundColor=#0e1117",
+        "--theme.secondaryBackgroundColor=#161b26",
+        "--theme.textColor=#f5f5f5",
     ]
     sys.exit(stcli.main())
 

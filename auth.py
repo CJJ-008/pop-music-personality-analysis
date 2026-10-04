@@ -30,6 +30,7 @@ import streamlit_authenticator as stauth
 # resolve_dirs 的实现在 user_store.py（「可写数据文件放哪」属于存储层的事），
 # 这里转出来是为了让 `from auth import resolve_dirs` 的既有写法继续可用（app.py 在用）。
 from user_store import (
+    ROLE_ADMIN,
     STATUS_ACTIVE,
     STATUS_DISABLED,
     get_store,
@@ -39,9 +40,10 @@ from user_store import (
 )
 import theme
 
-# 管理员角色名。管理页的可见性与渲染都以此为准，不认「用户名等于 admin」这种约定——
-# 用户名是可以随便起的，角色才是能配置的授权。
-ADMIN_ROLE = "admin"
+# 管理员角色名只在 user_store.py 定义一次（角色下拉、写计划也都用它），
+# 这里引用而不是再写一遍字面量——两处各写一个 "admin"，迟早有人只改一处。
+# 权限认角色不认「用户名等于 admin」这种约定：用户名可以随便起，角色才是授权。
+ADMIN_ROLE = ROLE_ADMIN
 
 # 表单中文标签（库默认是英文，这里全部汉化）
 LOGIN_FIELDS = {
